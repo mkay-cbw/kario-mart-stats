@@ -128,7 +128,7 @@ if cursor.fetchone()[0] == 0:
             ("GCN Yoshi-Circuit", "Ei-Cup"), ("Excitebike-Stadion", "Ei-Cup"), ("Große Verfolgungsjagd", "Ei-Cup"), ("Mute City", "Ei-Cup"),
             ("Wii Warios Goldmine", "Triforce-Cup"), ("SNES Regenbogen-Boulevard", "Triforce-Cup"), ("Polarkreis", "Triforce-Cup"), ("Hyrule-Piste", "Triforce-Cup"),
             ("GCN Baby-Park", "Crossing-Cup"), ("GBA Käseland", "Crossing-Cup"), ("Wilder Wario-Wanderweg", "Crossing-Cup"), ("Animal Crossing", "Crossing-Cup"),
-            ("3DS Koopa-Großstadtbucht", "Glocken-Cup"), ("GBA Schleifchenstraße", "Glocken-Cup"), ("Superglocken-U-Bahn", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
+            ("3DS Koopa-Großstadtbucht", "Glocken-Cup"), ("GBA Schleifchenstraße", "Glocken-Cup"), ("Marios Metro", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
             ("Tour Paris-Parcours", "Goldener Turbo-Cup"), ("3DS Toads Piste", "Goldener Turbo-Cup"), ("N64 Schoko-Sumpf", "Goldener Turbo-Cup"), ("Wii Kokos-Promenade", "Goldener Turbo-Cup"),
             ("Tour Tokio-Tempotour", "Glückskatzen-Cup"), ("DS Pilz-Pass", "Glückskatzen-Cup"), ("GBA Wolkenpiste", "Glückskatzen-Cup"), ("Ninja-Dojo", "Glückskatzen-Cup"),
             ("Tour New-York-Speedway", "Rüben-Cup"), ("SNES Marios Piste 3", "Rüben-Cup"), ("N64 Kalimari-Wüste", "Rüben-Cup"), ("DS Waluigi-Flipper", "Rüben-Cup"),
