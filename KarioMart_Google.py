@@ -471,7 +471,7 @@ with tab4:
         track_condition = f"AND r.strecken_name = '{h2h_strecke}'" if h2h_strecke != "Alle Strecken" else ""
 
         df_h2h_r = pd.read_sql_query(f"SELECT re.spieler_name as spieler, m.punkte, re.platzierung, r.turnier_id, CASE WHEN re.platzierung = 1 THEN 1 ELSE 0 END as ist_rennsieg FROM renn_ergebnisse re JOIN rennen r ON re.rennen_id = r.id JOIN punkte_mapping m ON re.platzierung = m.platzierung WHERE r.turnier_id IN ({subquery_gemeinsam}) AND re.spieler_name IN {names_str} {track_condition};", conn)
-        df_h2h_t = pd.read_sql_query(f"SELECT spieler_name as spieler, endplatzierung, CASE WHEN endplatzierung = 1 THEN 1 ELSE 0 END as ist_turniersieg FROM turnier_ergebnisse WHERE turnier_id IN ({subquery_gemeinsam}) AND spieler_name IN {names_str};", conn)
+        df_h2h_t = pd.read_sql_query(f"SELECT spieler_name as spieler, endplatzierung, (SELECT SUM(m2.punkte) FROM renn_ergebnisse re2 JOIN punkte_mapping m2 ON re2.platzierung = m2.platzierung JOIN rennen r2 ON re2.rennen_id = r2.id WHERE r2.turnier_id = te.turnier_id AND re2.spieler_name = te.spieler_name) as turnier_punkte, CASE WHEN endplatzierung = 1 THEN 1 ELSE 0 END as ist_turniersieg FROM turnier_ergebnisse te WHERE turnier_id IN ({subquery_gemeinsam}) AND spieler_name IN {names_str};", conn)
 
         if not df_h2h_r.empty:
             c1, c2 = st.columns(2)
@@ -480,6 +480,9 @@ with tab4:
                 st.bar_chart(df_h2h_r.groupby("spieler")["ist_rennsieg"].sum().reset_index().set_index("spieler"))
                 st.write("#### Ø-Platz Rennen ↓")
                 st.bar_chart(df_h2h_r.groupby("spieler")["platzierung"].mean().reset_index().set_index("spieler"))
+                st.write("#### Ø-Punkte / Rennen")
+                st.bar_chart(df_h2h_r.groupby("spieler")["punkte"].mean().reset_index().set_index("spieler"))
+                
             with c2:
                 if h2h_strecke == "Alle Strecken":
                     if not df_h2h_t.empty:
@@ -487,6 +490,8 @@ with tab4:
                         st.bar_chart(df_h2h_t.groupby("spieler")["ist_turniersieg"].sum().reset_index().set_index("spieler"))
                         st.write("#### Ø-Platz Turnier ↓")
                         st.bar_chart(df_h2h_t.groupby("spieler")["endplatzierung"].mean().reset_index().set_index("spieler"))
+                        st.write("#### Ø-Punkte / Turnier")
+                        st.bar_chart(df_h2h_t.groupby("spieler")["turnier_punkte"].mean().reset_index().set_index("spieler"))
                 else:
                     st.info("Turnier-Metriken bei Streckenfilter ausgeblendet.")
 
