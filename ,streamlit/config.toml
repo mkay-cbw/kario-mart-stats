@@ -1,4 +1,0 @@
-[theme]
-# This controls the default view when the app loads
-base = "dark" 
-baseFontSize = 25
