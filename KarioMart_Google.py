@@ -10,7 +10,7 @@ from streamlit_gsheets import GSheetsConnection
 # ==========================================
 
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
-st.title("Kario Mart Dashboard")
+st.write("### Kario Mart Dashboard")
 
 # Passwort-Schutz initialisieren
 if "authenticated" not in st.session_state:
