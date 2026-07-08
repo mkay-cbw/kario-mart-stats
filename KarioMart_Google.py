@@ -25,6 +25,7 @@ cursor.execute("PRAGMA foreign_keys = ON;")
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 if "session_initialized" not in st.session_state: st.session_state.session_initialized = False
 if "last_sync" not in st.session_state: st.session_state.last_sync = 0
+if "last_sync_time" not in st.session_state: st.session_state.last_sync_time = 0
 
 # Turnier-Setup
 if "turnier_aktiv" not in st.session_state: st.session_state.turnier_aktiv = False
@@ -67,6 +68,12 @@ def needs_sync():
 
 def lade_aus_cloud(force=False):
     """Holt Daten aus der Cloud. Verhindert Duplikate und bricht bei Fehlern ab."""
+    current_time = time.time()
+
+    # Check: Müssen wir überhaupt? (5 Minuten = 300 Sekunden)
+    if not force and (current_time - st.session_state.last_sync_time < 300):
+        return
+
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM spieler;")
     db_ist_leer = (c.fetchone()[0] == 0)
@@ -96,6 +103,7 @@ def lade_aus_cloud(force=False):
                 # st.error(f"Details: {e}")
                 st.stop()
     conn.commit()
+    st.session_state.last_sync_time = time.time()
 
 def speichere_in_cloud(force=False, tabellen=None):
     """Lädt die lokale Datenbank zu Google Sheets hoch. Abgesichert gegen Teil-Updates."""
@@ -185,6 +193,7 @@ with st.sidebar:
 
 # Markiere Session als initialisiert
 if not st.session_state.session_initialized:
+    lade_aus_cloud(force=False)
     st.session_state.session_initialized = True
 
 # Initialisierung Tabellen
