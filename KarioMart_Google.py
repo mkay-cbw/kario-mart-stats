@@ -5,20 +5,105 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
-from streamlit_scroll_to_top import scroll_to_here
 from streamlit_gsheets import GSheetsConnection
 from math import isnan
 
+
+ALL_TABLES = ["spieler", "strecken", "punkte_mapping", "turniere", "rennen", "renn_ergebnisse", "turnier_ergebnisse"]
+
+
 # ==========================================
-# 1. INITIALISIERUNG & CONFIG
+# 1. SESSION-STATES INITIALISIEREN
+# ==========================================
+
+# Authentifizierung & System
+if "authenticated" not in st.session_state: st.session_state.authenticated = False
+if "session_initialized" not in st.session_state: st.session_state.session_initialized = False
+if "last_sync" not in st.session_state: st.session_state.last_sync = 0
+
+# Turnier-Setup
+if "turnier_aktiv" not in st.session_state: st.session_state.turnier_aktiv = False
+if "turnier_id" not in st.session_state: st.session_state.turnier_id = None
+if "aktive_spieler_namen" not in st.session_state: st.session_state.aktive_spieler_namen = []
+if "wahl_modus" not in st.session_state: st.session_state.wahl_modus = "Zufällig"
+if "spielmodus" not in st.session_state: st.session_state.spielmodus = "Kario"
+if "gesamt_rennen" not in st.session_state: st.session_state.gesamt_rennen = 4
+
+# Turnier-Ablauf & UI-Steuerung
+if "aktuelle_runde" not in st.session_state: st.session_state.aktuelle_runde = 1
+if "warten_auf_endplatzierung" not in st.session_state: st.session_state.warten_auf_endplatzierung = False
+if "backup_rennen" not in st.session_state: st.session_state.backup_rennen = {}
+if "final_check_failed" not in st.session_state: st.session_state.final_check_failed = False
+
+# Sicherheitsabfragen (Löschen)
+if "confirm_delete_spieler" not in st.session_state: st.session_state.confirm_delete_spieler = None
+if "confirm_delete_turnier" not in st.session_state: st.session_state.confirm_delete_turnier = None
+
+
+# ==========================================
+# 2. HILFSFUNKTIONEN
+# ==========================================
+
+def lade_aus_cloud():
+    """Holt die frischen Daten aus Google Sheets."""
+    with st.spinner("☁️ Lade aktuellen Spielstand aus der Cloud..."):
+        for tabelle in ALL_TABLES:
+            try:
+                df_sheet = sheets_conn.read(worksheet=tabelle, ttl=0)
+                if df_sheet is not None and not df_sheet.empty:
+                    df_sheet.to_sql(tabelle, conn, if_exists="append", index=False)
+            except Exception:
+                pass
+
+def speichere_in_cloud(force=False, tabellen=None):
+    """Lädt die lokale Datenbank zu Google Sheets hoch."""
+    if tabellen is None:
+        tabellen = ALL_TABLES
+    now = time.time()
+    if not force and (now - st.session_state.last_sync < 10):
+        st.warning("Nicht gespeichert, um Cloud nicht zu überlasten. Versuche in wenigen Sekunden einen manuellen Sync.")
+        time.sleep(2)
+        return
+    with st.spinner("💾 Speichere Daten in der Cloud..."):
+        for tabelle in tabellen:
+            try:
+                df_sync = pd.read_sql_query(f"SELECT * FROM {tabelle};", conn)
+                sheets_conn.update(worksheet=tabelle, data=df_sync)
+            except Exception:
+                time.sleep(1)
+                st.error("❌ Cloud überlastet! Versuche in wenigen Sekunden einen manuellen Sync.")
+                time.sleep(2)
+                st.rerun()
+        st.success("Cloud-Sync erfolgreich!")
+        st.session_state.last_sync = time.time()
+
+def hat_duplikate(liste):
+    """Prüft auf Duplikate."""
+    return len(liste) != len(set(liste))
+
+def ui_platzierung_auswahl(name, prefix_key, default_val=None, custom_title=None):
+    """Erzeugt zwei 1x6 Segmented Controls und validiert die Eingabe."""
+    title = custom_title if custom_title else f"**{name}:**"
+    st.write(title)
+    d1 = default_val if default_val in [1, 2, 3, 4, 5, 6] else None
+    d2 = default_val if default_val in [7, 8, 9, 10, 11, 12] else None
+    p1 = st.segmented_control("Platz 1-6", options=[1, 2, 3, 4, 5, 6], default=d1, key=f"seg1_{prefix_key}_{name}", label_visibility="collapsed")
+    p2 = st.segmented_control("Platz 7-12", options=[7, 8, 9, 10, 11, 12], default=d2, key=f"seg2_{prefix_key}_{name}", label_visibility="collapsed")
+    st.write("")
+    if (p1 is not None) and (p2 is not None):
+        return "doppelt"
+    if (p1 is None) and (p2 is None):
+        return "fehlt"
+    return p1 if p1 is not None else p2
+
+
+# ==========================================
+# 3. INITIALISIERUNG & CONFIG
 # ==========================================
 
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
-st.write("### Kario Mart Dashboard")
-
-# Passwort-Schutz
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
+# st.write("### Kario Mart Dashboard")
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏁 **Turnier-Erfassung**", "👤 **Spieler**", "🗺️ **Strecken**", "⚔️ **Head-to-Head**", "📋 **Verlauf**"])
 
 # Sidebar
 with st.sidebar:
@@ -30,7 +115,7 @@ with st.sidebar:
             if passwort == st.secrets["passworte"]["admin_passwort"]:
                 st.session_state.authenticated = True
                 st.success("Erfolgreich angemeldet!")
-                time.sleep(1.5)
+                time.sleep(2)
                 st.rerun()
             else:
                 st.error("❌ Falsches Passwort!")
@@ -39,14 +124,19 @@ with st.sidebar:
         if st.button("Abmelden"):
             st.session_state.authenticated = False
             st.rerun()
+        st.divider()
+        st.subheader("☁️ Cloud-Synchronisation")
+        if st.button("💾 Speichern", type="primary"):
+            speichere_in_cloud(force=True)
 
+# Google-Sheets Verbindung
 sheets_conn = st.connection("gsheets", type=GSheetsConnection)
 
 # Lokale .db Datei als Cache
 DB_FILE = "kario_mart_cache.db"
 
 # Lösche alten Cache falls vorhanden
-if "session_initialized" not in st.session_state:
+if not st.session_state.session_initialized:
     if os.path.exists(DB_FILE):
         try:
             os.remove(DB_FILE)
@@ -54,97 +144,44 @@ if "session_initialized" not in st.session_state:
             st.warning("Alter Cache konnte nicht gelöscht werden.")
     st.session_state.session_initialized = True
 
+# Initialisierung Tabellen
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
-
 cursor.execute("PRAGMA foreign_keys = ON;")
-
 cursor.execute("CREATE TABLE IF NOT EXISTS spieler (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);")
-
 cursor.execute("CREATE TABLE IF NOT EXISTS strecken (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, cup TEXT NOT NULL);")
-
 cursor.execute("CREATE TABLE IF NOT EXISTS punkte_mapping (platzierung INTEGER PRIMARY KEY CHECK (platzierung BETWEEN 1 AND 12), punkte INTEGER NOT NULL);")
-
 cursor.execute("CREATE TABLE IF NOT EXISTS turniere (id INTEGER PRIMARY KEY AUTOINCREMENT, datum TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
-
 cursor.execute("CREATE TABLE IF NOT EXISTS rennen (id INTEGER PRIMARY KEY AUTOINCREMENT, turnier_id INTEGER REFERENCES turniere(id) ON DELETE CASCADE, strecken_name TEXT REFERENCES strecken(name) ON DELETE RESTRICT, gewaehlt_von_name TEXT REFERENCES spieler(name) ON DELETE SET NULL);")
-
 cursor.execute("CREATE TABLE IF NOT EXISTS renn_ergebnisse (id INTEGER PRIMARY KEY AUTOINCREMENT, rennen_id INTEGER REFERENCES rennen(id) ON DELETE CASCADE, spieler_name TEXT REFERENCES spieler(name) ON DELETE CASCADE, platzierung INTEGER REFERENCES punkte_mapping(platzierung), UNIQUE (rennen_id, spieler_name));")
+cursor.execute("CREATE TABLE IF NOT EXISTS turnier_ergebnisse (id INTEGER PRIMARY KEY AUTOINCREMENT, turnier_id INTEGER REFERENCES turniere(id) ON DELETE CASCADE, spieler_name TEXT REFERENCES spieler(name) ON DELETE CASCADE, endplatzierung INTEGER CHECK (endplatzierung BETWEEN 1 AND 12), bier_finished_nach INTEGER, kario INTEGER, UNIQUE (turnier_id, spieler_name));")
 
-cursor.execute("CREATE TABLE IF NOT EXISTS turnier_ergebnisse (id INTEGER PRIMARY KEY AUTOINCREMENT, turnier_id INTEGER REFERENCES turniere(id) ON DELETE CASCADE, spieler_name TEXT REFERENCES spieler(name) ON DELETE CASCADE, endplatzierung INTEGER CHECK (endplatzierung BETWEEN 1 AND 12), bier_finished_nach INTEGER, UNIQUE (turnier_id, spieler_name));")
-
-# Fügt Bier Spalte hinzu, falls noch nicht vorhanden
+# Migration für ältere Versionen (fügt Spalte 'kario' hinzu, falls noch nicht vorhanden)
 try:
-    cursor.execute("ALTER TABLE turnier_ergebnisse ADD COLUMN bier_finished_nach INTEGER;")
+    cursor.execute("ALTER TABLE turnier_ergebnisse ADD COLUMN kario INTEGER;")
 except sqlite3.OperationalError:
     pass  # Spalte existiert bereits
 
 conn.commit()
 
-ALL_TABLES = ["spieler", "strecken", "punkte_mapping", "turniere", "rennen", "renn_ergebnisse", "turnier_ergebnisse"]
 
 # ==========================================
-# 2. CLOUD SYNC
+# 3. SEED-DATEN
 # ==========================================
 
-# State für API-Cooldown
-if "last_sync" not in st.session_state: 
-    st.session_state.last_sync = 0
-
-def lade_aus_cloud():
-    """Holt die frischen Daten aus Google Sheets, wenn der Server neu aufwacht."""
-    with st.spinner("☁️ Lade aktuellen Spielstand aus der Cloud..."):
-        for tabelle in ALL_TABLES:
-            try:
-                df_sheet = sheets_conn.read(worksheet=tabelle, ttl=0)
-                if df_sheet is not None and not df_sheet.empty:
-                    df_sheet.to_sql(tabelle, conn, if_exists="append", index=False)
-            except Exception:
-                pass
-
-def speichere_in_cloud(force=False, tabellen=None):
-    """Schiebt die lokale Datenbank zu Google Sheets hoch."""
-    if tabellen is None:
-        tabellen = ALL_TABLES
-    now = time.time()
-    if not force and (now - st.session_state.last_sync < 10):
-        st.warning("Nicht gespeichert, um Cloud nicht zu überlasten. Versuche in wenigen Sekunden einen manuellen Sync.")
-        time.sleep(1.5)
-        return
-
-    with st.spinner("💾 Speichere Daten in der Cloud..."):
-        for tabelle in tabellen:
-            try:
-                df_sync = pd.read_sql_query(f"SELECT * FROM {tabelle};", conn)
-                sheets_conn.update(worksheet=tabelle, data=df_sync)
-            except Exception:
-                st.error("❌ Cloud überlastet, versuche in wenigen Sekunden einen manuellen Sync!")
-        st.success("Cloud-Sync erfolgreich!")
-        st.session_state.last_sync = time.time()
-        
-# Cloud-Speicher-Button in der Sidebar
-if st.session_state.authenticated:
-    with st.sidebar:
-        st.divider()
-        st.subheader("☁️ Cloud-Synchronisation")
-        if st.button("💾 Speichern", type="primary"):
-            speichere_in_cloud(force=True)
-
-# ==========================================
-# 3. SEED-DATEN & SESSION-STATES
-# ========================================== 
+# Punkteverteilung, Strecken & Spieler
 cursor.execute("SELECT COUNT(*) FROM spieler;")
 if cursor.fetchone()[0] == 0:
-    lade_aus_cloud()    
+    lade_aus_cloud()
     cursor.execute("SELECT COUNT(*) FROM spieler;")
-    
+
     if cursor.fetchone()[0] == 0:
         punkte_daten = [(1, 15), (2, 12), (3, 10), (4, 9), (5, 8), (6, 7), (7, 6), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
         cursor.executemany("INSERT OR IGNORE INTO punkte_mapping (platzierung, punkte) VALUES (?, ?);", punkte_daten)
-        
+
         spieler_daten = [("Anja",), ("Pfeiffer",), ("Markus",)]
         cursor.executemany("INSERT OR IGNORE INTO spieler (name) VALUES (?);", spieler_daten)
-        
+
         strecken_daten = [
             ("Mario Kart-Stadion", "Pilz-Cup"), ("Wasserpark", "Pilz-Cup"), ("Zuckersüßer Canyon", "Pilz-Cup"), ("Steinblock-Ruinen", "Pilz-Cup"),
             ("Marios Piste", "Blumen-Cup"), ("Toads Hafenstadt", "Blumen-Cup"), ("Gruselwusel-Villa", "Blumen-Cup"), ("Shy Guys Wasserfälle", "Blumen-Cup"),
@@ -172,58 +209,15 @@ if cursor.fetchone()[0] == 0:
             ("Tour Stadtrundfahrt Madrid", "Stachi-Cup"), ("3DS Rosalinas Eisplanet", "Stachi-Cup"), ("SNES Bowsers Festung 3", "Stachi-Cup"), ("Wii Regenbogen-Boulevard", "Stachi-Cup")
         ]
         cursor.executemany("INSERT OR IGNORE INTO strecken (name, cup) VALUES (?, ?);", strecken_daten)
+
         conn.commit()
         speichere_in_cloud(force=True, tabellen=["spieler", "strecken", "punkte_mapping"])
         st.rerun()
 
 # Stammdaten für Selectboxen
 df_spieler = pd.read_sql_query("SELECT * FROM spieler ORDER BY name ASC;", conn)
-
 df_strecken = pd.read_sql_query("SELECT * FROM strecken ORDER BY name ASC;", conn)
 
-# Session States
-if "turnier_aktiv" not in st.session_state: st.session_state.turnier_aktiv = False
-if "aktuelle_runde" not in st.session_state: st.session_state.aktuelle_runde = 1
-if "gesamt_rennen" not in st.session_state: st.session_state.gesamt_rennen = 4
-if "turnier_id" not in st.session_state: st.session_state.turnier_id = None
-if "aktive_spieler_namen" not in st.session_state: st.session_state.aktive_spieler_namen = []
-if "wahl_modus" not in st.session_state: st.session_state.wahl_modus = "Zufällig"
-if "spielmodus" not in st.session_state: st.session_state.spielmodus = "Kario"
-if "warten_auf_endplatzierung" not in st.session_state: st.session_state.warten_auf_endplatzierung = False
-if "scroll_to_top" not in st.session_state: st.session_state.scroll_to_top = False
-
-# ==========================================
-# 4. HILFSFUNKTIONEN
-# ==========================================
-def hat_duplikate(liste):
-    """Prüft auf Duplikate."""
-    return len(liste) != len(set(liste))
-
-def ui_platzierung_auswahl(name, prefix_key, default_val=None, custom_title=None):
-    """Erzeugt zwei 1x6 Segmented Controls und validiert die Eingabe."""
-    title = custom_title if custom_title else f"**{name}:**"
-    st.write(title)
-    
-    d1 = default_val if default_val in [1, 2, 3, 4, 5, 6] else None
-    d2 = default_val if default_val in [7, 8, 9, 10, 11, 12] else None
-    
-    p1 = st.segmented_control("Platz 1-6", options=[1, 2, 3, 4, 5, 6], default=d1, key=f"seg1_{prefix_key}_{name}", label_visibility="collapsed")
-    p2 = st.segmented_control("Platz 7-12", options=[7, 8, 9, 10, 11, 12], default=d2, key=f"seg2_{prefix_key}_{name}", label_visibility="collapsed")
-    
-    st.write("") 
-    
-    if (p1 is not None) and (p2 is not None):
-        return "doppelt" 
-    if (p1 is None) and (p2 is None):
-        return "fehlt"   
-    return p1 if p1 is not None else p2
-
-# Scroll
-if st.session_state.scroll_to_top:
-    scroll_to_here(0, key='top')
-    st.session_state.scroll_to_top = False
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏁 Turnier-Erfassung", "👤 Spieler", "🗺️ Strecken", "⚔️ Head-to-Head", "📋 Verlauf"])
 
 # ==========================================
 # TAB 1: TURNIER-ERFASSUNG
@@ -234,14 +228,14 @@ with tab1:
     else:
         # Neues Turnier
         if not st.session_state.turnier_aktiv and not st.session_state.warten_auf_endplatzierung:
-            st.write("#### Neues Turnier")
-            
+            st.write("##### Setup")
+
             st.write("**Spieler:**")
             ausgewaehlte_namen = st.multiselect("Spieler", df_spieler["name"].tolist(), key="spieler_tab1", default=["Pfeiffer", "Markus"] if len(df_spieler) >= 2 else [], label_visibility="collapsed")
-            
+
             st.write("**Anzahl Rennen:**")
             anzahl_rennen = st.number_input("Anzahl Rennen", min_value=1, max_value=48, value=4, step=1, label_visibility="collapsed")
-            
+
             st.write("**Strecken-Auswahlmodus:**")
             wahl_modus = st.segmented_control("Strecken-Auswahlmodus", options=["Zufällig", "Auswahl"], default="Zufällig", label_visibility="collapsed")
 
@@ -272,125 +266,164 @@ with tab1:
 
         # Rennen
         elif st.session_state.turnier_aktiv and not st.session_state.warten_auf_endplatzierung:
-
-            progress_float = st.session_state.aktuelle_runde / st.session_state.gesamt_rennen
-            st.write(f"#### Rennen {st.session_state.aktuelle_runde} von {st.session_state.gesamt_rennen}")
-            st.progress(progress_float)             
+            st.write("##### Rennplatzierungen")
 
             aktive_namen = st.session_state.aktive_spieler_namen
-            
-            st.write("**Strecke:**")
-            strecke_name = st.selectbox("Strecke", df_strecken["name"].tolist(), key=f"track_{st.session_state.aktuelle_runde}", label_visibility="collapsed")
+            alle_rennen_valide = True
+            erstes_fehler_rennen = None
 
-            wer_gewaehlt_name = None
-            if st.session_state.wahl_modus == "Auswahl":
-                st.write("**Gewählt von:**")
-                wer_gewaehlt_name = st.selectbox("Gewählt von", aktive_namen, key=f"picker_{st.session_state.aktuelle_runde}", label_visibility="collapsed")
+            # Expander für einzelne Rennen
+            for r_nr in range(1, st.session_state.gesamt_rennen + 1):
+                soll_offen_sein = (r_nr == st.session_state.aktuelle_runde)
 
-            # H2H Durchschnittsplatzierung auf dieser Strecke
-            formatted_names = ",".join([f"'{n}'" for n in aktive_namen])
-            names_str = f"({formatted_names})"
-            
-            df_h2h_track = pd.read_sql_query(f"SELECT re.spieler_name as Spieler, ROUND(AVG(re.platzierung), 2) as 'Ø-Platz' FROM renn_ergebnisse re JOIN rennen r ON re.rennen_id = r.id WHERE r.strecken_name = '{strecke_name}' AND r.id IN (SELECT rennen_id FROM renn_ergebnisse WHERE spieler_name IN {names_str} GROUP BY rennen_id HAVING COUNT(DISTINCT spieler_name) = {len(aktive_namen)}) AND re.spieler_name IN {names_str} GROUP BY re.spieler_name ORDER BY AVG(re.platzierung) ASC;", conn)
-            
-            if not df_h2h_track.empty:
-                st.write("**Ø-Platz auf dieser Strecke:**")
-                st.dataframe(df_h2h_track, hide_index=True, width='stretch')
-            else:
-                st.info("Noch keine gemeinsamen Rennen auf dieser Strecke.")
-
-            st.divider()
-
-            st.write("#### Platzierungen")
-            platzierungen = {}
-            eingabe_fehler = False
-
-            for name in aktive_namen:
-                val = ui_platzierung_auswahl(name, prefix_key=f"r_{st.session_state.aktuelle_runde}")
-                if val in ["doppelt", "fehlt"]:
-                    eingabe_fehler = True
+                if soll_offen_sein:
+                    expander_titel = f"🔥 **Rennen {r_nr}**"
+                elif st.session_state.get("final_check_failed", False):
+                    expander_titel = f"✅ **Rennen {r_nr}**"
+                elif r_nr < st.session_state.aktuelle_runde:
+                    expander_titel = f"✅ **Rennen {r_nr}**"
                 else:
-                    platzierungen[name] = int(val)
+                    expander_titel = f"**Rennen {r_nr}**"
 
-            st.divider()
+                with st.expander(expander_titel, expanded=soll_offen_sein):
 
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                if st.button("Speichern", type="primary"):
-                    if eingabe_fehler:
-                        st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
-                    elif hat_duplikate(list(platzierungen.values())):
-                        st.error("❌ Doppelte Platzierung!")
+                    # Strecke
+                    alle_strecken_namen = df_strecken["name"].tolist()
+                    saved_track = st.session_state.backup_rennen.get(f"track_{r_nr}", alle_strecken_namen[0])
+                    track_index = alle_strecken_namen.index(saved_track) if saved_track in alle_strecken_namen else 0
+                    st.write("**Strecke:**")
+                    strecke_name = st.selectbox("Strecke", alle_strecken_namen, index=track_index, key=f"track_{r_nr}", label_visibility="collapsed")
+                    wer_gewaehlt_name = None
+                    if st.session_state.wahl_modus == "Auswahl":
+                        saved_picker = st.session_state.backup_rennen.get(f"picker_{r_nr}", aktive_namen[0])
+                        picker_index = aktive_namen.index(saved_picker) if saved_picker in aktive_namen else 0
+                        st.write("**Gewählt von:**")
+                        wer_gewaehlt_name = st.selectbox("Gewählt von", aktive_namen, index=picker_index, key=f"picker_{r_nr}", label_visibility="collapsed")
+
+                    # H2H
+                    formatted_names = ",".join([f"'{n}'" for n in aktive_namen])
+                    names_str = f"({formatted_names})"
+                    df_h2h_track = pd.read_sql_query(f"SELECT re.spieler_name as Spieler, ROUND(AVG(re.platzierung), 2) as 'Ø-Platz' FROM renn_ergebnisse re JOIN rennen r ON re.rennen_id = r.id WHERE r.strecken_name = '{strecke_name}' AND r.id IN (SELECT rennen_id FROM renn_ergebnisse WHERE spieler_name IN {names_str} GROUP BY rennen_id HAVING COUNT(DISTINCT spieler_name) = {len(aktive_namen)}) AND re.spieler_name IN {names_str} GROUP BY re.spieler_name ORDER BY AVG(re.platzierung) ASC;", conn)
+                    if not df_h2h_track.empty:
+                        st.write("**Ø-Platz auf dieser Strecke:**")
+                        st.dataframe(df_h2h_track, hide_index=True, use_container_width=True)
                     else:
-                        c = conn.cursor()
-                        c.execute("INSERT INTO rennen (turnier_id, strecken_name, gewaehlt_von_name) VALUES (?, ?, ?);", (st.session_state.turnier_id, strecke_name, wer_gewaehlt_name))
-                        r_id = c.lastrowid
-                        
-                        for s_name, platz in platzierungen.items():
-                            c.execute("INSERT INTO renn_ergebnisse (rennen_id, spieler_name, platzierung) VALUES (?, ?, ?);", (r_id, s_name, platz))
-                        conn.commit()
+                        st.info("Keine gemeinsamen Rennen auf dieser Strecke.")
 
-                        if st.session_state.aktuelle_runde >= st.session_state.gesamt_rennen:
-                            st.session_state.turnier_aktiv = False
-                            st.session_state.warten_auf_endplatzierung = True
+                    st.write("---")
+
+                    # Platzierungen
+                    st.write("**Platzierungen:**")
+                    platzierungen = {}
+                    lokaler_fehler = False
+                    eingabe_fehler = False
+                    doppelte = False
+                    for name in aktive_namen:
+                        saved_platz = st.session_state.backup_rennen.get(f"platz_{r_nr}_{name}", None)
+                        val = ui_platzierung_auswahl(name, prefix_key=f"r_{r_nr}", default_val=saved_platz)
+                        if val in ["doppelt", "fehlt"]:
+                            lokaler_fehler = True
+                            eingabe_fehler = True
                         else:
-                            st.session_state.aktuelle_runde += 1
-                        st.session_state.scroll_to_top = True
+                            platzierungen[name] = int(val)
+                    if not eingabe_fehler and hat_duplikate(list(platzierungen.values())):
+                        lokaler_fehler = True
+                        doppelte = True
+                    if lokaler_fehler:
+                        alle_rennen_valide = False
+                        if erstes_fehler_rennen is None:
+                            erstes_fehler_rennen = r_nr
+
+                    # Weiter-Button
+                    if soll_offen_sein:
+                        if r_nr < st.session_state.gesamt_rennen:
+                            st.write("---")
+                            if st.button(f"Weiter", key=f"btn_next_{r_nr}"):
+                                if eingabe_fehler:
+                                    st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
+                                elif doppelte:
+                                    st.error("❌ Doppelte Platzierung!")
+                                else:
+                                    pass
+                                    st.session_state.aktuelle_runde = r_nr + 1
+                                    st.rerun()
+
+            # Globale Buttons
+            st.divider()
+            col_save, col_cancel = st.columns([3, 1])
+
+            with col_save:
+                if st.button("Speichern", type="primary"):
+                    if not alle_rennen_valide:
+                        st.error(f"❌ Fehler bei den Platzierungen! Überprüfe Rennen {erstes_fehler_rennen}.")
+                        st.session_state.aktuelle_runde = erstes_fehler_rennen
+                        st.session_state.final_check_failed = True
+                        time.sleep(2)
                         st.rerun()
-            with col2:
-                if st.button("Zurück"):
-                    if st.session_state.aktuelle_runde > 1:
-                        c = conn.cursor()
-                        c.execute("SELECT MAX(id) FROM rennen WHERE turnier_id = ?;", (st.session_state.turnier_id,))
-                        last_race_id = c.fetchone()[0]
-                        if last_race_id:
-                            c.execute("DELETE FROM rennen WHERE id = ?;", (last_race_id,))
-                            conn.commit()
-                            st.session_state.aktuelle_runde -= 1
-                            st.session_state.scroll_to_top = True
-                            st.rerun()
                     else:
-                        c = conn.cursor()
-                        c.execute("DELETE FROM turniere WHERE id = ?;", (st.session_state.turnier_id,))
-                        conn.commit()
+                        # Backup
+                        st.session_state.final_check_failed = False
+                        st.session_state.backup_rennen = {}
+                        for r in range(1, st.session_state.gesamt_rennen + 1):
+                            st.session_state.backup_rennen[f"track_{r}"] = st.session_state[f"track_{r}"]
+                            if st.session_state.wahl_modus == "Auswahl":
+                                st.session_state.backup_rennen[f"picker_{r}"] = st.session_state[f"picker_{r}"]
+
+                            for name in aktive_namen:
+                                p1 = st.session_state.get(f"seg1_r_{r}_{name}")
+                                p2 = st.session_state.get(f"seg2_r_{r}_{name}")
+                                platz = p1 if p1 is not None else p2
+                                st.session_state.backup_rennen[f"platz_{r}_{name}"] = int(platz) if platz is not None else None
+
+                        # Umschalten auf den Endplatzierungs-Screen
                         st.session_state.turnier_aktiv = False
-                        st.session_state.turnier_id = None
-                        st.session_state.scroll_to_top = True
+                        st.session_state.warten_auf_endplatzierung = True
                         st.rerun()
-                if st.button("Abbrechen"):
+
+            with col_cancel:
+                if st.button("❌ Abbrechen"):
                     c = conn.cursor()
                     c.execute("DELETE FROM turniere WHERE id = ?;", (st.session_state.turnier_id,))
                     conn.commit()
+                    st.session_state.backup_rennen = {}
+                    st.session_state.final_check_failed = False
                     st.session_state.turnier_aktiv = False
                     st.session_state.turnier_id = None
-                    st.session_state.scroll_to_top = True
                     st.rerun()
 
         # Endplatzierungen
         elif st.session_state.warten_auf_endplatzierung:
 
-            st.write("#### Turnier-Endplatzierungen")
+            st.write("##### Turnier-Endplatzierungen")
             aktive_namen = st.session_state.aktive_spieler_namen
 
-            df_punkte = pd.read_sql_query(f"SELECT re.spieler_name, SUM(m.punkte) as total_punkte FROM renn_ergebnisse re JOIN rennen r ON re.rennen_id = r.id JOIN punkte_mapping m ON re.platzierung = m.platzierung WHERE r.turnier_id = {st.session_state.turnier_id} GROUP BY re.spieler_name;", conn)
-            punkte_dict = dict(zip(df_punkte["spieler_name"], df_punkte["total_punkte"]))
+            # Gesamtpunkte
+            punkte_dict = {name: 0 for name in aktive_namen}
+            df_map = pd.read_sql_query("SELECT * FROM punkte_mapping;", conn)
+            map_dict = dict(zip(df_map["platzierung"], df_map["punkte"]))
+            for r in range(1, st.session_state.gesamt_rennen + 1):
+                for name in aktive_namen:
+                    pl = st.session_state.backup_rennen.get(f"platz_{r}_{name}")
+                    if pl in map_dict:
+                        punkte_dict[name] += map_dict[pl]
 
             end_platzierungen = {}
             bier_finished = {}
             eingabe_fehler = False
             eingabe_fehler_bier = False
 
+            # Endplatzierungen
             for name in aktive_namen:
                 val = ui_platzierung_auswahl(name, prefix_key="ep", custom_title=f"**{name}** ({punkte_dict[name]} Punkte)**:**")
                 if val in ["doppelt", "fehlt"]:
                     eingabe_fehler = True
                 else:
                     end_platzierungen[name] = int(val)
-                
+
             # Kario
             if st.session_state.spielmodus == "Kario":
                 st.write("---")
-                st.write("#### Bier")
+                st.write("##### Bier")
                 for name in aktive_namen:
                     st.write(f"**{name}:**")
                     bier_options = list(range(1, st.session_state.gesamt_rennen + 1))
@@ -406,6 +439,7 @@ with tab1:
 
             st.divider()
 
+            # Buttons
             col1, col2 = st.columns([3, 1])
             with col1:
                 if st.button("Abschließen", type="primary"):
@@ -416,52 +450,62 @@ with tab1:
                     else:
                         c = conn.cursor()
                         if "❌" in list(bier_finished.values()):
-                            st.warning("Bier nicht geleert, Endplatzierung wird auf 12 gesetzt!")
-                            time.sleep(1.5)
+                            st.error("⚠️ Bier nicht geleert, Endplatzierung wird auf 12 gesetzt!")
+                            time.sleep(2)
 
+                        # Rennergebnisse aus Backup schreiben
+                        for r_nr in range(1, st.session_state.gesamt_rennen + 1):
+                            s_track = st.session_state.backup_rennen[f"track_{r_nr}"]
+                            s_picker = st.session_state.backup_rennen.get(f"picker_{r_nr}", None)
+
+                            c.execute("INSERT INTO rennen (turnier_id, strecken_name, gewaehlt_von_name) VALUES (?, ?, ?);", (st.session_state.turnier_id, s_track, s_picker))
+                            r_id = c.lastrowid
+
+                            for name in aktive_namen:
+                                platz = st.session_state.backup_rennen[f"platz_{r_nr}_{name}"]
+                                c.execute("INSERT INTO renn_ergebnisse (rennen_id, spieler_name, platzierung) VALUES (?, ?, ?);", (r_id, name, int(platz)))
+
+                        # Endplatzierungen aus Backup schreiben
+                        kario_val = 1 if st.session_state.spielmodus == "Kario" else 0
                         for s_name, endplatz in end_platzierungen.items():
                             b_val = bier_finished.get(s_name, None)
                             if b_val == "❌":
                                 b_val = None
                                 endplatz = 12
-                            c.execute("INSERT INTO turnier_ergebnisse (turnier_id, spieler_name, endplatzierung, bier_finished_nach) VALUES (?, ?, ?, ?);", (st.session_state.turnier_id, s_name, endplatz, b_val))
+                            c.execute("INSERT INTO turnier_ergebnisse (turnier_id, spieler_name, endplatzierung, bier_finished_nach, kario) VALUES (?, ?, ?, ?, ?);", (st.session_state.turnier_id, s_name, endplatz, b_val, kario_val))
                         conn.commit()
-                        
+
+                        # Backup leeren
+                        st.session_state.backup_rennen = {}
+
                         speichere_in_cloud(tabellen=["turniere", "rennen", "renn_ergebnisse", "turnier_ergebnisse"])
-                        
+
                         st.session_state.warten_auf_endplatzierung = False
                         st.session_state.turnier_id = None
-                        st.success("Turnier vollständig verbucht und in der Cloud gesichert!")
-                        time.sleep(1.5)
+                        # st.success("Turnier vollständig verbucht und in der Cloud gesichert!")
+                        time.sleep(2)
                         st.rerun()
             with col2:
                 if st.button("Zurück"):
-                    c = conn.cursor()
-                    c.execute("SELECT MAX(id) FROM rennen WHERE turnier_id = ?;", (st.session_state.turnier_id,))
-                    last_race_id = c.fetchone()[0]
-                    if last_race_id:
-                        c.execute("DELETE FROM rennen WHERE id = ?;", (last_race_id,))
-                        conn.commit()
+                    st.session_state.warten_auf_endplatzierung = False
+                    st.session_state.turnier_aktiv = True
+                    st.session_state.aktuelle_runde = st.session_state.gesamt_rennen + 1
+                    st.session_state.final_check_failed = False
+                    st.rerun()
 
-                        st.session_state.warten_auf_endplatzierung = False
-                        st.session_state.turnier_aktiv = True  
-                        st.session_state.scroll_to_top = True
-                        st.rerun()
-                        
                 if st.button("Abbrechen"):
                     c = conn.cursor()
                     c.execute("DELETE FROM turniere WHERE id = ?;", (st.session_state.turnier_id,))
                     conn.commit()
                     st.session_state.warten_auf_endplatzierung = False
                     st.session_state.turnier_id = None
-                    st.session_state.scroll_to_top = True
                     st.rerun()
 
 # ==========================================
 # TAB 2: SPIELER-PROFILE & VERWALTUNG
 # ==========================================
 with tab2:
-    with st.expander("👤 Verwaltung Spieler-Datenbank"):
+    with st.expander("👤 **Verwaltung Spieler-Datenbank**"):
         if not st.session_state.authenticated:
             st.warning("🔒 Melde dich an.")
         else:
@@ -472,11 +516,12 @@ with tab2:
                 if st.button("Hinzufügen", type="primary"):
                     if neuer_name.strip():
                         try:
-                            cursor.execute("INSERT INTO spieler (name) VALUES (?);", (neuer_name.strip(),))
+                            c = conn.cursor()
+                            c.execute("INSERT INTO spieler (name) VALUES (?);", (neuer_name.strip(),))
                             conn.commit()
                             speichere_in_cloud(tabellen=["spieler"])
                             st.success(f"{neuer_name} hinzugefügt!")
-                            time.sleep(1.5)
+                            time.sleep(2)
                             st.rerun()
                         except sqlite3.IntegrityError:
                             st.error("❌ Name existiert bereits!")
@@ -484,17 +529,32 @@ with tab2:
                 if not df_spieler.empty:
                     st.write("**Löschen:**")
                     loesch_name = st.selectbox("Löschen", df_spieler["name"].tolist(), label_visibility="collapsed")
-                    if st.button("Löschen", type="secondary"):
-                        cursor.execute("DELETE FROM spieler WHERE name = ?;", (loesch_name,))
-                        conn.commit()
-                        speichere_in_cloud(tabellen=["spieler", "rennen", "renn_ergebnisse", "turnier_ergebnisse"])
-                        st.success(f"{loesch_name} gelöscht!")
-                        time.sleep(1.5)
-                        st.rerun()
+
+                    # Sicherheitsabfrage
+                    if st.session_state.get("confirm_delete_spieler") != loesch_name:
+                        if st.button("Löschen", type="secondary"):
+                            st.session_state.confirm_delete_spieler = loesch_name
+                            st.rerun()
+                    else:
+                        st.error(f"⚠️ **{loesch_name}** unwiderruflich löschen?")
+                        c_conf1, c_conf2 = st.columns(2)
+                        with c_conf1:
+                            if st.button("Löschen", type="primary", use_container_width=True):
+                                cursor.execute("DELETE FROM spieler WHERE name = ?;", (loesch_name,))
+                                conn.commit()
+                                speichere_in_cloud(tabellen=["spieler", "rennen", "renn_ergebnisse", "turnier_ergebnisse"])
+                                st.error(f"{loesch_name} gelöscht!")
+                                st.session_state.confirm_delete_spieler = None
+                                time.sleep(2)
+                                st.rerun()
+                        with c_conf2:
+                            if st.button("Abbrechen", use_container_width=True):
+                                st.session_state.confirm_delete_spieler = None
+                                st.rerun()
 
     st.divider()
 
-    st.write("#### Spieler-Statistiken")
+    st.write("##### Spieler-Statistiken")
     if not df_spieler.empty:
         st.write("**Spieler:**")
         profil_name = st.selectbox("Spieler", df_spieler["name"].tolist(), label_visibility="collapsed")
@@ -511,6 +571,24 @@ with tab2:
 
         df_lieblings_strecken = pd.read_sql_query(f"SELECT r.strecken_name as 'Strecke', COUNT(r.id) as 'Gewählt', ROUND((SELECT AVG(re2.platzierung) FROM renn_ergebnisse re2 JOIN rennen r2 ON re2.rennen_id = r2.id WHERE r2.strecken_name = r.strecken_name AND re2.spieler_name = '{profil_name}'), 2) as 'Ø-Platz' FROM rennen r WHERE r.gewaehlt_von_name = '{profil_name}' GROUP BY r.strecken_name ORDER BY COUNT(r.id) DESC, r.strecken_name ASC LIMIT 5;", conn)
 
+        df_r_platz_wenn_gewaehlt = pd.read_sql_query(f"SELECT AVG(re.platzierung) as avg_r_platz_wg FROM renn_ergebnisse re JOIN rennen r ON re.rennen_id = r.id WHERE r.gewaehlt_von_name = re.spieler_name AND re.spieler_name = '{profil_name}'", conn)
+
+        df_kario_turniere_gesamt = pd.read_sql_query(f"SELECT COUNT(DISTINCT turnier_id) as kario_turniere FROM turnier_ergebnisse WHERE spieler_name = '{profil_name}' AND kario = 1", conn)
+
+        df_bier_finished = pd.read_sql_query(f"SELECT AVG(bier_finished_nach) as avg_bier_finished_nach FROM turnier_ergebnisse WHERE spieler_name = '{profil_name}' AND bier_finished_nach IS NOT NULL", conn)
+
+        df_kario_siege = pd.read_sql_query(f"SELECT COUNT(*) as kario_siege FROM turnier_ergebnisse WHERE spieler_name = '{profil_name}' AND endplatzierung = 1 AND kario = 1", conn)
+        pass
+
+        st.markdown("""
+            <style>
+                [data-testid="stMetricLabel"], 
+                [data-testid="stMetricLabel"] * {
+                    white-space: pre-wrap !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+
         if df_r_stats["gesamt_rennen"].values[0] > 0:
             tot_pts = df_r_stats["gesamt_punkte"].values[0] or 0
             tot_races = df_r_stats["gesamt_rennen"].values[0] or 1
@@ -519,19 +597,23 @@ with tab2:
             m_col1, m_col2, m_col3, m_col4 = st.columns(4)
             with m_col1:
                 st.metric("**Ø-Platz Rennen**", f"{df_r_stats['avg_r_platz'].values[0]:.2f}")
+                st.metric("**Ø-Platz Rennen\n(w.s.g.)**", f"{df_r_platz_wenn_gewaehlt['avg_r_platz_wg'].values[0]:.2f}" if pd.notnull(df_r_platz_wenn_gewaehlt['avg_r_platz_wg'].values[0]) else "N/A")
                 st.metric("**Ø-Platz Turnier**", f"{df_t_platz['avg_t_platz'].values[0]:.2f}" if pd.notnull(df_t_platz['avg_t_platz'].values[0]) else "N/A")
             with m_col2:
                 st.metric("**Ø-Punkte / Rennen**", f"{df_r_stats['avg_r_punkte'].values[0]:.2f}")
-                st.metric("**Ø-Punkte / Turnier (4 R.)**", f"{genormte_punkte:.2f}")
+                st.metric("**Ø-Punkte / Turnier\n(4 R.)**", f"{genormte_punkte:.2f}")
+                st.metric("**Ø-Rennen / Bier**", f"{df_bier_finished['avg_bier_finished_nach'].values[0]:.2f}" if pd.notnull(df_bier_finished['avg_bier_finished_nach'].values[0]) else "N/A")
             with m_col3:
-                st.metric("**Rennsiege**", f"{df_r_siege['r_siege'].values[0]} 🏁")
-                st.metric("**Turniersiege**", f"{df_t_siege['t_siege'].values[0]} 🏆")
+                st.metric("**Rennsiege**", f"{df_r_siege['r_siege'].values[0]}")
+                st.metric("**Turniersiege\n(Gesamt)**", f"{df_t_siege['t_siege'].values[0]}")
+                st.metric("**Kariosiege**", f"{df_kario_siege['kario_siege'].values[0]}" if pd.notnull(df_kario_siege['kario_siege'].values[0]) else "N/A")
             with m_col4:
                 st.metric("**Rennen (Gesamt)**", f"{tot_races}")
                 st.metric("**Punkte (Gesamt)**", f"{tot_pts}")
+                st.metric("**Biere (Gesamt)**", f"{df_kario_turniere_gesamt['kario_turniere'].values[0]}" if pd.notnull(df_kario_turniere_gesamt['kario_turniere'].values[0]) else "N/A")
 
             st.divider()
-            st.write("#### 🏆 Ranglisten")
+            st.write("##### 🏆 Ranglisten")
             t_col1, t_col2 = st.columns(2)
             with t_col1:
                 st.write("**🔝 Beste Strecken**")
@@ -546,8 +628,8 @@ with tab2:
 # TAB 3: STRECKEN-DATENBANK
 # ==========================================
 with tab3:
-    st.write("#### Strecken-Statistiken")
-    
+    st.write("##### Strecken-Statistiken")
+
     st.write("**Strecke:**")
     selected_track = st.selectbox("Strecke", df_strecken["name"].tolist(), label_visibility="collapsed")
 
@@ -559,7 +641,7 @@ with tab3:
     st.write(f"**Am öftesten gewählt von:** {df_most_picked['name'].values[0] if not df_most_picked.empty else 'Niemandem'}")
 
     st.divider()
-    st.write("#### 🏆 Ranglisten")
+    st.write("##### 🏆 Ranglisten")
 
     query_siege = f"SELECT spieler_name as Spieler, COUNT(*) as Rennsiege FROM renn_ergebnisse re JOIN rennen r ON re.rennen_id = r.id WHERE r.strecken_name = '{selected_track}' AND re.platzierung = 1 GROUP BY spieler_name ORDER BY Rennsiege DESC;"
     query_platz = f"SELECT spieler_name as Spieler, AVG(re.platzierung) as 'Ø-Platz' FROM renn_ergebnisse re JOIN rennen r ON re.rennen_id = r.id WHERE r.strecken_name = '{selected_track}' GROUP BY spieler_name ORDER BY 'Ø-Platz' ASC;"
@@ -580,15 +662,15 @@ with tab3:
 # TAB 4: HEAD-TO-HEAD
 # ==========================================
 with tab4:
-    st.write("#### Rivalen-Vergleich")
-    
+    st.write("##### Rivalen-Vergleich")
+
     st.write("**Spieler:**")
     rivalen = st.multiselect("Spieler", df_spieler["name"].tolist(), key="spieler_tab4", default=["Pfeiffer", "Markus"] if len(df_spieler) >= 2 else [], label_visibility="collapsed")
 
     if len(rivalen) >= 2:
         formatted_names = ",".join([f"'{name}'" for name in rivalen])
         names_str = f"({formatted_names})"
-        
+
         st.write("**Filterung nach Strecke:**")
         h2h_strecke = st.selectbox("Filterung nach Strecke", ["Alle Strecken"] + df_strecken["name"].tolist(), label_visibility="collapsed")
 
@@ -608,7 +690,7 @@ with tab4:
                 st.bar_chart(df_h2h_r.groupby("spieler")["platzierung"].mean().reset_index().set_index("spieler"))
                 st.write("**Ø-Punkte / Rennen**")
                 st.bar_chart(df_h2h_r.groupby("spieler")["punkte"].mean().reset_index().set_index("spieler"))
-                
+
             with c2:
                 if h2h_strecke == "Alle Strecken":
                     if not df_h2h_t.empty:
@@ -625,12 +707,12 @@ with tab4:
 # TAB 5: VERLAUF & EDITIEREN
 # ==========================================
 with tab5:
-    st.write("#### Turnierverlauf")
+    st.write("##### Turnierverlauf")
 
-    df_verlauf = pd.read_sql_query("SELECT t.id as 'Turnier-ID', t.datum as 'Spieldatum', GROUP_CONCAT(te.spieler_name, ', ') as 'Teilnehmer' FROM turniere t JOIN turnier_ergebnisse te ON t.id = te.turnier_id GROUP BY t.id ORDER BY t.id DESC;", conn)
+    df_verlauf = pd.read_sql_query("SELECT t.id as 'Turnier-ID', t.datum as 'Datum', GROUP_CONCAT(te.spieler_name, ', ') as 'Teilnehmer' FROM turniere t JOIN turnier_ergebnisse te ON t.id = te.turnier_id GROUP BY t.id ORDER BY t.id DESC;", conn)
 
     if df_verlauf.empty:
-        st.info("Noch keine Turniere gespeichert.")
+        st.info("Keine Turniere gespeichert.")
     else:
         st.dataframe(df_verlauf, width="stretch", hide_index=True)
         st.divider()
@@ -638,21 +720,23 @@ with tab5:
         if not st.session_state.authenticated:
             st.warning("🔒 Melde dich an.")
         else:
-            st.write("#### Bearbeiten")
+            st.write("##### Bearbeiten")
             st.write("**Turnier-ID:**")
             ausgewaehltes_turnier = st.selectbox("Turnier-ID zum Bearbeiten", df_verlauf['Turnier-ID'].tolist(), key="select_edit_id", label_visibility="collapsed")
 
             st.divider()
 
             if ausgewaehltes_turnier:
-                st.write("#### Turnier-Endplatzierungen")
+                st.write("##### Turnier-Endplatzierungen")
                 df_aktuelle_platze = pd.read_sql_query(f"SELECT spieler_name, endplatzierung FROM turnier_ergebnisse WHERE turnier_id = {ausgewaehltes_turnier};", conn)
+                df_aktuelle_punkte = pd.read_sql_query(f"SELECT re.spieler_name, SUM(m.punkte) as total_punkte FROM renn_ergebnisse re JOIN rennen r ON re.rennen_id = r.id JOIN punkte_mapping m ON re.platzierung = m.platzierung WHERE r.turnier_id = {ausgewaehltes_turnier} GROUP BY re.spieler_name;", conn)
+                aktuelle_punkte_dict = dict(zip(df_aktuelle_punkte["spieler_name"], df_aktuelle_punkte["total_punkte"]))
 
                 edit_endplatzierungen = {}
                 eingabe_fehler_ep = False
-                
+
                 for _, row in df_aktuelle_platze.iterrows():
-                    val = ui_platzierung_auswahl(row['spieler_name'], prefix_key=f"edit_ep_{ausgewaehltes_turnier}", default_val=int(row['endplatzierung']))
+                    val = ui_platzierung_auswahl(row['spieler_name'], prefix_key=f"edit_ep_{ausgewaehltes_turnier}", custom_title=f"**{row['spieler_name']}** ({aktuelle_punkte_dict.get(row['spieler_name'], 0)} Punkte)**:**", default_val=int(row['endplatzierung']))
                     if val in ["doppelt", "fehlt"]:
                         eingabe_fehler_ep = True
                     else:
@@ -667,21 +751,21 @@ with tab5:
                             c.execute("UPDATE turnier_ergebnisse SET endplatzierung = ? WHERE turnier_id = ? AND spieler_name = ?;", (ep_neu, ausgewaehltes_turnier, s_name))
                         conn.commit()
                         speichere_in_cloud(tabellen=["turnier_ergebnisse"])
-                        st.success("Aktualisiert!")
-                        time.sleep(1.5)
+                        # st.success("Aktualisiert!")
+                        time.sleep(2)
                         st.rerun()
 
                 # Kario
-                df_aktuelle_bier = pd.read_sql_query(f"SELECT spieler_name, bier_finished_nach FROM turnier_ergebnisse WHERE turnier_id = {ausgewaehltes_turnier};", conn)
-                is_kario = df_aktuelle_bier['bier_finished_nach'].notna().any()
+                df_aktuelle_bier = pd.read_sql_query(f"SELECT spieler_name, bier_finished_nach, kario FROM turnier_ergebnisse WHERE turnier_id = {ausgewaehltes_turnier};", conn)
+                is_kario = (df_aktuelle_bier['kario'] == 1).any()
                 if is_kario:
                     st.divider()
-                    st.write("#### Bier")
+                    st.write("##### Bier")
 
                     # Gesamtanzahl Rennen
-                    c_rennen = conn.cursor()
-                    c_rennen.execute("SELECT COUNT(*) FROM rennen WHERE turnier_id = ?;", (ausgewaehltes_turnier,))
-                    anz_rennen_im_turnier = c_rennen.fetchone()[0] or 1
+                    c = conn.cursor()
+                    c.execute("SELECT COUNT(*) FROM rennen WHERE turnier_id = ?;", (ausgewaehltes_turnier,))
+                    anz_rennen_im_turnier = c.fetchone()[0] or 1
                     bier_options = list(range(1, anz_rennen_im_turnier + 1))
                     bier_options.append("❌")
 
@@ -713,49 +797,63 @@ with tab5:
                         else:
                             c = conn.cursor()
                             if "❌" in list(edit_bier.values()):
-                                st.warning("Bier nicht geleert, Endplatzierung wird auf 12 gesetzt!")
-                                time.sleep(1.5)
+                                st.error("⚠️ Bier nicht geleert, Endplatzierung wird auf 12 gesetzt!")
+                                time.sleep(2)
+
                             for s_name, b_neu in edit_bier.items():
                                 if b_neu == "❌":
                                     b_neu = None
                                     ep_neu = 12
                                     c.execute("UPDATE turnier_ergebnisse SET endplatzierung = ? WHERE turnier_id = ? AND spieler_name = ?;", (ep_neu, ausgewaehltes_turnier, s_name))
+
                                 c.execute("UPDATE turnier_ergebnisse SET bier_finished_nach = ? WHERE turnier_id = ? AND spieler_name = ?;", (b_neu, ausgewaehltes_turnier, s_name))
+
                             conn.commit()
                             speichere_in_cloud(tabellen=["turnier_ergebnisse"])
-                            st.success("Aktualisiert!")
-                            time.sleep(1.5)
+                            # st.success("Aktualisiert!")
+                            
+                            # Cache leeren und Keys löschen (Umgeht den Instantiation Error)
+                            st.cache_data.clear()
+                            for key in list(st.session_state.keys()):
+                                if f"edit_ep_{ausgewaehltes_turnier}" in key:
+                                    del st.session_state[key]
+                            
+                            time.sleep(2)
                             st.rerun()
 
                 st.divider()
-                st.write("#### Rennergebnisse")
+                st.write("##### Rennergebnisse")
                 df_rennen_liste = pd.read_sql_query(f"SELECT id as rennen_id, strecken_name FROM rennen WHERE turnier_id = {ausgewaehltes_turnier};", conn)
 
                 for idx, r_row in df_rennen_liste.iterrows():
                     r_id = int(r_row['rennen_id'])
-                    with st.expander(f"🏎️ Rennen {idx + 1} (ID #{r_id}): {r_row['strecken_name']}"):
-                        c_race = conn.cursor()
-                        c_race.execute("SELECT strecken_name, gewaehlt_von_name FROM rennen WHERE id = ?;", (r_id,))
-                        curr_race = c_race.fetchone()
+                    with st.expander(f"**Rennen {idx + 1}** (ID #{r_id})**:** {r_row['strecken_name']}"):
+                        c = conn.cursor()
+                        c.execute("SELECT strecken_name, gewaehlt_von_name FROM rennen WHERE id = ?;", (r_id,))
+                        curr_race = c.fetchone()
 
                         alle_strecken_namen = df_strecken["name"].tolist()
                         curr_track_name = curr_race[0]
-                        
+                        picker_name_db = curr_race[1]
+
                         st.write("**Strecke:**")
                         neue_strecke_name = st.selectbox("Strecke", alle_strecken_namen, index=alle_strecken_namen.index(curr_track_name) if curr_track_name in alle_strecken_namen else 0, key=f"edit_track_select_{r_id}", label_visibility="collapsed")
 
                         df_res_players = pd.read_sql_query(f"SELECT spieler_name, platzierung FROM renn_ergebnisse WHERE rennen_id = {r_id};", conn)
-                        picker_options = ["Niemand (Zufall)"] + df_res_players["spieler_name"].tolist()
-                        curr_picker_index = picker_options.index(curr_race[1]) if curr_race[1] is not None and curr_race[1] in picker_options else 0
+                        
+                        neuer_picker_name_val = picker_name_db
+                        if picker_name_db is not None:
+                            picker_options = ["Niemand (Zufall)"] + df_res_players["spieler_name"].tolist()
+                            curr_picker_index = picker_options.index(picker_name_db) if picker_name_db in picker_options else 0
 
-                        st.write("**Gewählt von:**")
-                        neuer_picker_name = st.selectbox("Gewählt von", picker_options, index=curr_picker_index, key=f"edit_picker_select_{r_id}", label_visibility="collapsed")
-                        neuer_picker_name_val = None if neuer_picker_name == "Niemand (Zufall)" else neuer_picker_name
+                            st.write("**Gewählt von:**")
+                            neuer_picker_name = st.selectbox("Gewählt von", picker_options, index=curr_picker_index, key=f"edit_picker_select_{r_id}", label_visibility="collapsed")
+                            neuer_picker_name_val = None if neuer_picker_name == "Niemand (Zufall)" else neuer_picker_name
 
                         st.write("**Platzierungen:**")
                         edit_race_platzierungen = {}
                         eingabe_fehler_r = False
-                        
+
                         for _, p_row in df_res_players.iterrows():
                             val = ui_platzierung_auswahl(p_row['spieler_name'], prefix_key=f"edit_race_p_{r_id}", default_val=int(p_row['platzierung']))
                             if val in ["doppelt", "fehlt"]:
@@ -775,18 +873,32 @@ with tab5:
                                     c.execute("UPDATE renn_ergebnisse SET platzierung = ? WHERE rennen_id = ? AND spieler_name = ?;", (pl_neu, r_id, s_name))
                                 conn.commit()
                                 speichere_in_cloud(tabellen=["rennen", "renn_ergebnisse"])
-                                st.success("Aktualisiert!")
-                                time.sleep(1.5)
+                                # st.success("Aktualisiert!")
+                                time.sleep(2)
                                 st.rerun()
 
                 st.divider()
-                if st.button("❌ Gesamtes Turnier löschen", type="secondary", key=f"btn_del_{ausgewaehltes_turnier}"):
-                    c = conn.cursor()
-                    c.execute("DELETE FROM turniere WHERE id = ?;", (ausgewaehltes_turnier,))
-                    conn.commit()
-                    speichere_in_cloud(tabellen=["turniere", "rennen", "renn_ergebnisse", "turnier_ergebnisse"])
-                    st.success("Gelöscht!")
-                    time.sleep(1.5)
-                    st.rerun()
+
+                if st.session_state.get("confirm_delete_turnier") != ausgewaehltes_turnier:
+                    if st.button("Löschen", type="secondary", key=f"btn_del_{ausgewaehltes_turnier}"):
+                        st.session_state.confirm_delete_turnier = ausgewaehltes_turnier
+                        st.rerun()
+                else:
+                    st.error(f"⚠️ **Turnier #{ausgewaehltes_turnier}** unwiderruflich löschen?")
+                    c_t1, c_t2 = st.columns(2)
+                    with c_t1:
+                        if st.button("Löschen", type="primary", key=f"btn_del_confirm_{ausgewaehltes_turnier}", use_container_width=True):
+                            c = conn.cursor()
+                            c.execute("DELETE FROM turniere WHERE id = ?;", (ausgewaehltes_turnier,))
+                            conn.commit()
+                            speichere_in_cloud(tabellen=["turniere", "rennen", "renn_ergebnisse", "turnier_ergebnisse"])
+                            st.error(f"Turnier #{ausgewaehltes_turnier} gelöscht!")
+                            st.session_state.confirm_delete_turnier = None
+                            time.sleep(2)
+                            st.rerun()
+                    with c_t2:
+                        if st.button("Abbrechen", key=f"btn_del_cancel_{ausgewaehltes_turnier}", use_container_width=True):
+                            st.session_state.confirm_delete_turnier = None
+                            st.rerun()
 
 conn.close()
