@@ -10,6 +10,11 @@ from math import isnan
 
 
 ALL_TABLES = ["spieler", "strecken", "punkte_mapping", "turniere", "rennen", "renn_ergebnisse", "turnier_ergebnisse"]
+DB_FILE = "kario_mart_cache.db"
+conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=20)
+sheets_conn = st.connection("gsheets", type=GSheetsConnection)
+cursor = conn.cursor()
+cursor.execute("PRAGMA foreign_keys = ON;")
 
 
 # ==========================================
@@ -44,38 +49,82 @@ if "confirm_delete_turnier" not in st.session_state: st.session_state.confirm_de
 # 2. HILFSFUNKTIONEN
 # ==========================================
 
-def lade_aus_cloud():
-    """Holt die frischen Daten aus Google Sheets."""
-    with st.spinner("☁️ Lade aktuellen Spielstand aus der Cloud..."):
+def needs_sync():
+    """Prüft, ob die lokale Datenbank von der Cloud abweicht."""
+    try:
+        # Lokale Anzahl der Turniere
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM turniere;")
+        local_count = c.fetchone()[0]
+
+        # Cloud Anzahl der Turniere
+        df_cloud = sheets_conn.read(worksheet="turniere", ttl=0)
+        cloud_count = len(df_cloud) if df_cloud is not None else 0
+
+        return local_count != cloud_count
+    except Exception:
+        return True # Bei Zweifeln/Fehlern Sync
+
+def lade_aus_cloud(force=False):
+    """Holt Daten aus der Cloud. Verhindert Duplikate und bricht bei Fehlern ab."""
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM spieler;")
+    db_ist_leer = (c.fetchone()[0] == 0)
+
+    # Abbruchbedingung: Wenn nicht erzwungen und DB nicht leer, prüfe auf Unterschiede
+    if not force and not db_ist_leer:
+        if not needs_sync():
+            return # Synchron
+
+    with st.spinner("☁️ Synchronisiere Daten mit der Cloud... (Bitte warten)"):
+        # Leeren der lokalen DB vor dem Sync um Duplikate beim 'append' zu vermeiden
+        # Tabellen in UMGEKEHRTER Reihenfolge leeren (Child-Tables zuerst), um Foreign Key Fehler zu vermeiden
+        if not db_ist_leer:
+            c = conn.cursor()
+            for tabelle in reversed(ALL_TABLES):
+                c.execute(f"DELETE FROM {tabelle};")
+            conn.commit()
+
         for tabelle in ALL_TABLES:
             try:
                 df_sheet = sheets_conn.read(worksheet=tabelle, ttl=0)
                 if df_sheet is not None and not df_sheet.empty:
                     df_sheet.to_sql(tabelle, conn, if_exists="append", index=False)
-            except Exception:
-                pass
+            except Exception as e:
+                # Abbruch
+                st.error(f"❌ Fehler beim Laden der Tabelle '{tabelle}'! Versuche es später erneut.")
+                # st.error(f"Details: {e}")
+                st.stop()
+    conn.commit()
 
 def speichere_in_cloud(force=False, tabellen=None):
-    """Lädt die lokale Datenbank zu Google Sheets hoch."""
+    """Lädt die lokale Datenbank zu Google Sheets hoch. Abgesichert gegen Teil-Updates."""
     if tabellen is None:
         tabellen = ALL_TABLES
     now = time.time()
+
     if not force and (now - st.session_state.last_sync < 10):
-        st.warning("Nicht gespeichert, um Cloud nicht zu überlasten. Versuche in wenigen Sekunden einen manuellen Sync.")
+        st.warning("Nicht gespeichert, um Cloud nicht zu überlasten. Benutze den 'Speichern' Button in der Sidebar.")
         time.sleep(2)
         return
+
     with st.spinner("💾 Speichere Daten in der Cloud..."):
+        fehler_aufgetreten = False
+
         for tabelle in tabellen:
             try:
                 df_sync = pd.read_sql_query(f"SELECT * FROM {tabelle};", conn)
                 sheets_conn.update(worksheet=tabelle, data=df_sync)
-            except Exception:
-                time.sleep(1)
-                st.error("❌ Cloud überlastet! Versuche in wenigen Sekunden einen manuellen Sync.")
-                time.sleep(2)
-                st.rerun()
-        st.success("Cloud-Sync erfolgreich!")
-        st.session_state.last_sync = time.time()
+            except Exception as e:
+                fehler_aufgetreten = True
+                st.error(f"❌ Fehler beim Speichern der Tabelle '{tabelle}'!")
+                time.sleep(2) # Kurze Pause, falls die API gerade ein Rate-Limit hat
+
+        if fehler_aufgetreten:
+            st.error("❌ Cloud-Sync war unvollständig! Benutze den 'Speichern' Button in der Sidebar.")
+        else:
+            st.success("Cloud-Sync erfolgreich!")
+            st.session_state.last_sync = time.time()
 
 def hat_duplikate(liste):
     """Prüft auf Duplikate."""
@@ -128,26 +177,17 @@ with st.sidebar:
         st.subheader("☁️ Cloud-Synchronisation")
         if st.button("💾 Speichern", type="primary"):
             speichere_in_cloud(force=True)
+        if st.button("🔄 Überschreiben", type="secondary"):
+            lade_aus_cloud(force=True)
+            st.success("Daten erfolgreich aus der Cloud überschrieben!")
+            time.sleep(2)
+            st.rerun()
 
-# Google-Sheets Verbindung
-sheets_conn = st.connection("gsheets", type=GSheetsConnection)
-
-# Lokale .db Datei als Cache
-DB_FILE = "kario_mart_cache.db"
-
-# Lösche alten Cache falls vorhanden
+# Markiere Session als initialisiert
 if not st.session_state.session_initialized:
-    if os.path.exists(DB_FILE):
-        try:
-            os.remove(DB_FILE)
-        except Exception as e:
-            st.warning("Alter Cache konnte nicht gelöscht werden.")
     st.session_state.session_initialized = True
 
 # Initialisierung Tabellen
-conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("PRAGMA foreign_keys = ON;")
 cursor.execute("CREATE TABLE IF NOT EXISTS spieler (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);")
 cursor.execute("CREATE TABLE IF NOT EXISTS strecken (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, cup TEXT NOT NULL);")
 cursor.execute("CREATE TABLE IF NOT EXISTS punkte_mapping (platzierung INTEGER PRIMARY KEY CHECK (platzierung BETWEEN 1 AND 12), punkte INTEGER NOT NULL);")
@@ -166,53 +206,56 @@ conn.commit()
 
 
 # ==========================================
-# 3. SEED-DATEN
+# 4. SEED-DATEN
 # ==========================================
 
-# Punkteverteilung, Strecken & Spieler
-cursor.execute("SELECT COUNT(*) FROM spieler;")
+# 1. Automatischer Check
+lade_aus_cloud(force=False)
+
+# 2. Notfall-Seed: Wird NUR ausgeführt, wenn die Cloud komplett leer war (Ersteinrichtung)
+cursor.execute("SELECT COUNT(*) FROM punkte_mapping;")
 if cursor.fetchone()[0] == 0:
-    lade_aus_cloud()
-    cursor.execute("SELECT COUNT(*) FROM spieler;")
+    # --- PUNKTE ---
+    punkte_daten = [(1, 15), (2, 12), (3, 10), (4, 9), (5, 8), (6, 7), (7, 6), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
+    cursor.executemany("INSERT INTO punkte_mapping (platzierung, punkte) VALUES (?, ?);", punkte_daten)
 
-    if cursor.fetchone()[0] == 0:
-        punkte_daten = [(1, 15), (2, 12), (3, 10), (4, 9), (5, 8), (6, 7), (7, 6), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
-        cursor.executemany("INSERT OR IGNORE INTO punkte_mapping (platzierung, punkte) VALUES (?, ?);", punkte_daten)
+    # --- SPIELER ---
+    spieler_daten = [("Anja",), ("Pfeiffer",), ("Markus",)]
+    cursor.executemany("INSERT INTO spieler (name) VALUES (?);", spieler_daten)
 
-        spieler_daten = [("Anja",), ("Pfeiffer",), ("Markus",)]
-        cursor.executemany("INSERT OR IGNORE INTO spieler (name) VALUES (?);", spieler_daten)
+    # --- STRECKEN ---
+    strecken_daten = [
+        ("Mario Kart-Stadion", "Pilz-Cup"), ("Wasserpark", "Pilz-Cup"), ("Zuckersüßer Canyon", "Pilz-Cup"), ("Steinblock-Ruinen", "Pilz-Cup"),
+        ("Marios Piste", "Blumen-Cup"), ("Toads Hafenstadt", "Blumen-Cup"), ("Gruselwusel-Villa", "Blumen-Cup"), ("Shy Guys Wasserfälle", "Blumen-Cup"),
+        ("Sonnenflughafen", "Stern-Cup"), ("Delfinlagune", "Stern-Cup"), ("Discodrom", "Stern-Cup"), ("Wario-Abfahrt", "Stern-Cup"),
+        ("Wolkenstraße", "Spezial-Cup"), ("Knochentrockene Dünen", "Spezial-Cup"), ("Bowsers Festung", "Spezial-Cup"), ("Regenbogen-Boulevard", "Spezial-Cup"),
+        ("Wii Kuhmuh-Weide", "Panzer-Cup"), ("GBA Marios Piste", "Panzer-Cup"), ("DS Cheep-Cheep-Strand", "Panzer-Cup"), ("N64 Toads Autobahn", "Panzer-Cup"),
+        ("GCN Staubtrockene Wüste", "Bananen-Cup"), ("SNES Donut-Ebene 3", "Bananen-Cup"), ("N64 Königliche Rennpiste", "Bananen-Cup"), ("3DS DK Dschungel", "Bananen-Cup"),
+        ("DS Wario-Arena", "Blatt-Cup"), ("GCN Sorbet-Land", "Blatt-Cup"), ("3DS Instrumentalpiste", "Blatt-Cup"), ("N64 Yoshi-Tal", "Blatt-Cup"),
+        ("DS Ticktack-Trauma", "Blitz-Cup"), ("3DS Röhrenraserei", "Blitz-Cup"), ("Wii Vulkangrollen", "Blitz-Cup"), ("N64 Regenbogen-Boulevard", "Blitz-Cup"),
+        ("GCN Yoshis Piste", "Ei-Cup"), ("Excitebike-Stadion", "Ei-Cup"), ("Große Drachenmauer", "Ei-Cup"), ("Mute City", "Ei-Cup"),
+        ("Wii Warios Goldmine", "Triforce-Cup"), ("SNES Regenbogen-Boulevard", "Triforce-Cup"), ("Polarkreis-Parcours", "Triforce-Cup"), ("Hyrule-Piste", "Triforce-Cup"),
+        ("GCN Baby-Park", "Crossing-Cup"), ("GBA Käseland", "Crossing-Cup"), ("Wilder Wipfelweg", "Crossing-Cup"), ("Animal Crossing-Dorf", "Crossing-Cup"),
+        ("3DS Koopa-Großstadtfieber", "Glocken-Cup"), ("GBA Party-Straße", "Glocken-Cup"), ("Marios-Metro", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
+        ("Tour Paris-Parcours", "Goldener Turbo-Cup"), ("3DS Toads Piste", "Goldener Turbo-Cup"), ("N64 Schoko-Sumpf", "Goldener Turbo-Cup"), ("Wii Kokos-Promenade", "Goldener Turbo-Cup"),
+        ("Tour Tokio-Tempotour", "Glückskatzen-Cup"), ("DS Pilz-Pass", "Glückskatzen-Cup"), ("GBA Wolkenpiste", "Glückskatzen-Cup"), ("Tour Ninja-Dojo", "Glückskatzen-Cup"),
+        ("Tour New-York-Speedway", "Rüben-Cup"), ("SNES Marios Piste 3", "Rüben-Cup"), ("N64 Kalimari-Wüste", "Rüben-Cup"), ("DS Waluigi-Flipper", "Rüben-Cup"),
+        ("Tour Sydney-Spritztour", "Propeller-Cup"), ("GBA Schneeland", "Propeller-Cup"), ("Wii Pilz-Schlucht", "Propeller-Cup"), ("Eiscreme-Eskapade", "Propeller-Cup"),
+        ("Tour London-Tour", "Fels-Cup"), ("GBA Buu-Huu-Tal", "Fels-Cup"), ("3DS Gebirgspfad", "Fels-Cup"), ("Wii Blätterwald", "Fels-Cup"),
+        ("Tour Pflaster von Berlin", "Mond-Cup"), ("DS Peachs Schlossgarten", "Mond-Cup"), ("Tour Bergbescherung", "Mond-Cup"), ("3DS Regenbogen-Boulevard", "Mond-Cup"),
+        ("Tour Ausfahrt Amsterdam", "Frucht-Cup"), ("GBA Flussufer-Park", "Frucht-Cup"), ("Wii DK Skikane", "Frucht-Cup"), ("Yoshis Eiland", "Frucht-Cup"),
+        ("Tour Bangkok-Abendrot", "Bumerang-Cup"), ("DS Marios Piste", "Bumerang-Cup"), ("GCN Waluigi-Arena", "Bumerang-Cup"), ("Tour Überholspur Singapur", "Bumerang-Cup"),
+        ("Tour Athen auf Abwegen", "Feder-Cup"), ("GCN Daisys Dampfer", "Feder-Cup"), ("Wii Mondblickstraße", "Feder-Cup"), ("Bad-Parcours", "Feder-Cup"),
+        ("Tour Los-Angeles-Strandpartie", "Doppelkirschen-Cup"), ("GBA Sonnenuntergangs-Wüste", "Doppelkirschen-Cup"), ("Wii Koopa-Kap", "Doppelkirschen-Cup"), ("Tour Vancouver-Wildpfad", "Doppelkirschen-Cup"),
+        ("Tour Rom-Rambazamba", "Eichel-Cup"), ("GCN DK-Bergland", "Eichel-Cup"), ("Wii Daisys Piste", "Eichel-Cup"), ("Tour Piranha-Pflanzen-Bucht", "Eichel-Cup"),
+        ("Tour Stadtrundfahrt Madrid", "Stachi-Cup"), ("3DS Rosalinas Eisplanet", "Stachi-Cup"), ("SNES Bowsers Festung 3", "Stachi-Cup"), ("Wii Regenbogen-Boulevard", "Stachi-Cup")
+    ]
+    cursor.executemany("INSERT INTO strecken (name, cup) VALUES (?, ?);", strecken_daten)
+    conn.commit()
 
-        strecken_daten = [
-            ("Mario Kart-Stadion", "Pilz-Cup"), ("Wasserpark", "Pilz-Cup"), ("Zuckersüßer Canyon", "Pilz-Cup"), ("Steinblock-Ruinen", "Pilz-Cup"),
-            ("Marios Piste", "Blumen-Cup"), ("Toads Hafenstadt", "Blumen-Cup"), ("Gruselwusel-Villa", "Blumen-Cup"), ("Shy Guys Wasserfälle", "Blumen-Cup"),
-            ("Sonnenflughafen", "Stern-Cup"), ("Delfinlagune", "Stern-Cup"), ("Discodrom", "Stern-Cup"), ("Wario-Abfahrt", "Stern-Cup"),
-            ("Wolkenstraße", "Spezial-Cup"), ("Knochentrockene Dünen", "Spezial-Cup"), ("Bowsers Festung", "Spezial-Cup"), ("Regenbogen-Boulevard", "Spezial-Cup"),
-            ("Wii Kuhmuh-Weide", "Panzer-Cup"), ("GBA Marios Piste", "Panzer-Cup"), ("DS Cheep-Cheep-Strand", "Panzer-Cup"), ("N64 Toads Autobahn", "Panzer-Cup"),
-            ("GCN Staubtrockene Wüste", "Bananen-Cup"), ("SNES Donut-Ebene 3", "Bananen-Cup"), ("N64 Königliche Rennpiste", "Bananen-Cup"), ("3DS DK Dschungel", "Bananen-Cup"),
-            ("DS Wario-Arena", "Blatt-Cup"), ("GCN Sorbet-Land", "Blatt-Cup"), ("3DS Instrumentalpiste", "Blatt-Cup"), ("N64 Yoshi-Tal", "Blatt-Cup"),
-            ("DS Ticktack-Trauma", "Blitz-Cup"), ("3DS Röhrenraserei", "Blitz-Cup"), ("Wii Vulkangrollen", "Blitz-Cup"), ("N64 Regenbogen-Boulevard", "Blitz-Cup"),
-            ("GCN Yoshis Piste", "Ei-Cup"), ("Excitebike-Stadion", "Ei-Cup"), ("Große Drachenmauer", "Ei-Cup"), ("Mute City", "Ei-Cup"),
-            ("Wii Warios Goldmine", "Triforce-Cup"), ("SNES Regenbogen-Boulevard", "Triforce-Cup"), ("Polarkreis-Parcours", "Triforce-Cup"), ("Hyrule-Piste", "Triforce-Cup"),
-            ("GCN Baby-Park", "Crossing-Cup"), ("GBA Käseland", "Crossing-Cup"), ("Wilder Wipfelweg", "Crossing-Cup"), ("Animal Crossing-Dorf", "Crossing-Cup"),
-            ("3DS Koopa-Großstadtfieber", "Glocken-Cup"), ("GBA Party-Straße", "Glocken-Cup"), ("Marios-Metro", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
-            ("Tour Paris-Parcours", "Goldener Turbo-Cup"), ("3DS Toads Piste", "Goldener Turbo-Cup"), ("N64 Schoko-Sumpf", "Goldener Turbo-Cup"), ("Wii Kokos-Promenade", "Goldener Turbo-Cup"),
-            ("Tour Tokio-Tempotour", "Glückskatzen-Cup"), ("DS Pilz-Pass", "Glückskatzen-Cup"), ("GBA Wolkenpiste", "Glückskatzen-Cup"), ("Tour Ninja-Dojo", "Glückskatzen-Cup"),
-            ("Tour New-York-Speedway", "Rüben-Cup"), ("SNES Marios Piste 3", "Rüben-Cup"), ("N64 Kalimari-Wüste", "Rüben-Cup"), ("DS Waluigi-Flipper", "Rüben-Cup"),
-            ("Tour Sydney-Spritztour", "Propeller-Cup"), ("GBA Schneeland", "Propeller-Cup"), ("Wii Pilz-Schlucht", "Propeller-Cup"), ("Eiscreme-Eskapade", "Propeller-Cup"),
-            ("Tour London-Tour", "Fels-Cup"), ("GBA Buu-Huu-Tal", "Fels-Cup"), ("3DS Gebirgspfad", "Fels-Cup"), ("Wii Blätterwald", "Fels-Cup"),
-            ("Tour Pflaster von Berlin", "Mond-Cup"), ("DS Peachs Schlossgarten", "Mond-Cup"), ("Tour Bergbescherung", "Mond-Cup"), ("3DS Regenbogen-Boulevard", "Mond-Cup"),
-            ("Tour Ausfahrt Amsterdam", "Frucht-Cup"), ("GBA Flussufer-Park", "Frucht-Cup"), ("Wii DK Skikane", "Frucht-Cup"), ("Yoshis Eiland", "Frucht-Cup"),
-            ("Tour Bangkok-Abendrot", "Bumerang-Cup"), ("DS Marios Piste", "Bumerang-Cup"), ("GCN Waluigi-Arena", "Bumerang-Cup"), ("Tour Überholspur Singapur", "Bumerang-Cup"),
-            ("Tour Athen auf Abwegen", "Feder-Cup"), ("GCN Daisys Dampfer", "Feder-Cup"), ("Wii Mondblickstraße", "Feder-Cup"), ("Bad-Parcours", "Feder-Cup"),
-            ("Tour Los-Angeles-Strandpartie", "Doppelkirschen-Cup"), ("GBA Sonnenuntergangs-Wüste", "Doppelkirschen-Cup"), ("Wii Koopa-Kap", "Doppelkirschen-Cup"), ("Tour Vancouver-Wildpfad", "Doppelkirschen-Cup"),
-            ("Tour Rom-Rambazamba", "Eichel-Cup"), ("GCN DK-Bergland", "Eichel-Cup"), ("Wii Daisys Piste", "Eichel-Cup"), ("Tour Piranha-Pflanzen-Bucht", "Eichel-Cup"),
-            ("Tour Stadtrundfahrt Madrid", "Stachi-Cup"), ("3DS Rosalinas Eisplanet", "Stachi-Cup"), ("SNES Bowsers Festung 3", "Stachi-Cup"), ("Wii Regenbogen-Boulevard", "Stachi-Cup")
-        ]
-        cursor.executemany("INSERT OR IGNORE INTO strecken (name, cup) VALUES (?, ?);", strecken_daten)
-
-        conn.commit()
-        speichere_in_cloud(force=True, tabellen=["spieler", "strecken", "punkte_mapping"])
-        st.rerun()
+    # 3. Push in die Cloud
+    speichere_in_cloud(force=True, tabellen=["spieler", "strecken", "punkte_mapping"])
+    st.rerun()
 
 # Stammdaten für Selectboxen
 df_spieler = pd.read_sql_query("SELECT * FROM spieler ORDER BY name ASC;", conn)
@@ -540,7 +583,8 @@ with tab2:
                         c_conf1, c_conf2 = st.columns(2)
                         with c_conf1:
                             if st.button("Löschen", type="primary", use_container_width=True):
-                                cursor.execute("DELETE FROM spieler WHERE name = ?;", (loesch_name,))
+                                c = conn.cursor()
+                                c.execute("DELETE FROM spieler WHERE name = ?;", (loesch_name,))
                                 conn.commit()
                                 speichere_in_cloud(tabellen=["spieler", "rennen", "renn_ergebnisse", "turnier_ergebnisse"])
                                 st.error(f"{loesch_name} gelöscht!")
@@ -752,6 +796,10 @@ with tab5:
                         conn.commit()
                         speichere_in_cloud(tabellen=["turnier_ergebnisse"])
                         # st.success("Aktualisiert!")
+                        st.cache_data.clear()
+                        for key in list(st.session_state.keys()):
+                            if f"edit_ep_{ausgewaehltes_turnier}" in key:
+                                del st.session_state[key]
                         time.sleep(2)
                         st.rerun()
 
@@ -811,13 +859,13 @@ with tab5:
                             conn.commit()
                             speichere_in_cloud(tabellen=["turnier_ergebnisse"])
                             # st.success("Aktualisiert!")
-                            
+
                             # Cache leeren und Keys löschen (Umgeht den Instantiation Error)
                             st.cache_data.clear()
                             for key in list(st.session_state.keys()):
                                 if f"edit_ep_{ausgewaehltes_turnier}" in key:
                                     del st.session_state[key]
-                            
+
                             time.sleep(2)
                             st.rerun()
 
@@ -840,7 +888,7 @@ with tab5:
                         neue_strecke_name = st.selectbox("Strecke", alle_strecken_namen, index=alle_strecken_namen.index(curr_track_name) if curr_track_name in alle_strecken_namen else 0, key=f"edit_track_select_{r_id}", label_visibility="collapsed")
 
                         df_res_players = pd.read_sql_query(f"SELECT spieler_name, platzierung FROM renn_ergebnisse WHERE rennen_id = {r_id};", conn)
-                        
+
                         neuer_picker_name_val = picker_name_db
                         if picker_name_db is not None:
                             picker_options = ["Niemand (Zufall)"] + df_res_players["spieler_name"].tolist()
@@ -874,6 +922,10 @@ with tab5:
                                 conn.commit()
                                 speichere_in_cloud(tabellen=["rennen", "renn_ergebnisse"])
                                 # st.success("Aktualisiert!")
+                                st.cache_data.clear()
+                                for key in list(st.session_state.keys()):
+                                    if f"edit_race_p_{r_id}" in key or f"edit_track_select_{r_id}" in key or f"edit_picker_select_{r_id}" in key:
+                                        del st.session_state[key]
                                 time.sleep(2)
                                 st.rerun()
 
