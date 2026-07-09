@@ -71,7 +71,7 @@ def lade_aus_cloud(force=False):
     current_time = time.time()
 
     # Check: Müssen wir überhaupt? (5 Minuten = 300 Sekunden)
-    if not force and (current_time - st.session_state.last_sync_time < 300):
+    if not force and not st.session_state.turnier_aktiv and not st.session_state.warten_auf_endplatzierung and (current_time - st.session_state.last_sync_time < 300):
         return
 
     c = conn.cursor()
