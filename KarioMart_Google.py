@@ -193,7 +193,6 @@ with st.sidebar:
 
 # Markiere Session als initialisiert
 if not st.session_state.session_initialized:
-    lade_aus_cloud(force=False)
     st.session_state.session_initialized = True
 
 # Initialisierung Tabellen
