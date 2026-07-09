@@ -191,10 +191,6 @@ with st.sidebar:
             time.sleep(2)
             st.rerun()
 
-# Markiere Session als initialisiert
-if not st.session_state.session_initialized:
-    st.session_state.session_initialized = True
-
 # Initialisierung Tabellen
 cursor.execute("CREATE TABLE IF NOT EXISTS spieler (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);")
 cursor.execute("CREATE TABLE IF NOT EXISTS strecken (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, cup TEXT NOT NULL);")
@@ -218,7 +214,12 @@ conn.commit()
 # ==========================================
 
 # 1. Automatischer Check
-lade_aus_cloud(force=False)
+# Markiere Session als initialisiert
+if not st.session_state.session_initialized:
+    st.session_state.session_initialized = True
+    lade_aus_cloud(force=True)
+else:
+    lade_aus_cloud(force=False)
 
 # 2. Notfall-Seed: Wird NUR ausgeführt, wenn die Cloud komplett leer war (Ersteinrichtung)
 cursor.execute("SELECT COUNT(*) FROM punkte_mapping;")
