@@ -70,8 +70,8 @@ def lade_aus_cloud(force=False):
     """Holt Daten aus der Cloud. Verhindert Duplikate und bricht bei Fehlern ab."""
     current_time = time.time()
 
-    # Check: Müssen wir überhaupt? (5 Minuten = 300 Sekunden)
-    if not force and not st.session_state.turnier_aktiv and not st.session_state.warten_auf_endplatzierung and (current_time - st.session_state.last_sync_time < 300):
+    # Check: Müssen wir überhaupt? (15 Minuten = 900 Sekunden)
+    if (not force and (current_time - st.session_state.last_sync_time < 900)) or (st.session_state.turnier_aktiv or st.session_state.warten_auf_endplatzierung):
         return
 
     c = conn.cursor()
