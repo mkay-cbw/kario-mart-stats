@@ -195,9 +195,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏁 **Turnier-Erfassung**", "👤 **Sp
 # Markiere Session als initialisiert
 if not st.session_state.session_initialized: st.session_state.session_initialized = True
 
-# Bei jedem Rerun prüfen ob Sync notwendig
-lade_aus_cloud(force=False)
-
 # Sidebar
 with st.sidebar:
     st.subheader("🔒 Admin-Bereich")
@@ -392,6 +389,11 @@ df_strecken = pd.read_sql_query("""
     ORDER BY name ASC;
 """, conn)
 
+
+# ==========================================
+# 5. SYNC
+# ==========================================
+lade_aus_cloud(force=False)
 
 # ==========================================
 # TAB 1: TURNIER-ERFASSUNG
