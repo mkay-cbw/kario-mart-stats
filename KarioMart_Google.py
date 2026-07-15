@@ -192,6 +192,9 @@ def ui_platzierung_auswahl(name, prefix_key, default_val=None, custom_title=None
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏁 **Turnier-Erfassung**", "👤 **Spieler**", "🗺️ **Strecken**", "⚔️ **Head-to-Head**", "📋 **Verlauf**"])
 
+# Sync
+lade_aus_cloud(force=False)
+
 # Markiere Session als initialisiert
 if not st.session_state.session_initialized: st.session_state.session_initialized = True
 
@@ -389,11 +392,6 @@ df_strecken = pd.read_sql_query("""
     ORDER BY name ASC;
 """, conn)
 
-
-# ==========================================
-# 5. SYNC
-# ==========================================
-lade_aus_cloud(force=False)
 
 # ==========================================
 # TAB 1: TURNIER-ERFASSUNG
