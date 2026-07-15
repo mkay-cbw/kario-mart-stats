@@ -1,11 +1,12 @@
+import os
 import time
 import sqlite3
+from math import isnan
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
-from math import isnan
 
 
 # ==========================================
@@ -30,7 +31,6 @@ if "authenticated" not in st.session_state: st.session_state.authenticated = Fal
 if "session_initialized" not in st.session_state: st.session_state.session_initialized = False
 if "last_upload" not in st.session_state: st.session_state.last_upload = 0
 if "last_download" not in st.session_state: st.session_state.last_download = 0
-if "cloud_timestamp" not in st.session_state: st.session_state.cloud_timestamp = None
 
 # Turnier-Parameter
 if "turnier_id" not in st.session_state: st.session_state.turnier_id = None
@@ -63,7 +63,13 @@ def needs_sync():
         df_ts = sheets_conn.read(worksheet="timestamp", ttl=0)
         if df_ts is not None and not df_ts.empty and "timestamp" in df_ts.columns:
             cloud_ts = str(df_ts["timestamp"].iloc[0])
-            local_ts = st.session_state.get("cloud_timestamp", "")
+
+            c = conn.cursor()
+            c.execute("""
+                SELECT timestamp 
+                FROM cloud_timestamp 
+                WHERE id = 1;""")
+            local_ts = c.fetchone()[0]
             return cloud_ts != local_ts
     except:
         return True  # Bei Zweifeln/Fehlern
@@ -71,9 +77,10 @@ def needs_sync():
 def lade_aus_cloud(force=False):
     """Holt Daten aus dem Google Sheet. Verhindert Duplikate und bricht bei Fehlern ab."""
 
-    # Alle 10 Minuten
+    # Alle sync_interval_min Minuten
     current_time = time.time()
-    if (not force and (current_time - st.session_state.last_download < 600)) or (st.session_state.turnier_aktiv or st.session_state.warten_auf_endplatzierung):  # Kein force und weniger als 10 Minuten, oder laufendes Turnier
+    sync_interval_min = 5
+    if (not force and (current_time - st.session_state.last_download < sync_interval_min * 60)) or (st.session_state.turnier_aktiv and not st.session_state.warten_auf_endplatzierung):  # Kein force und weniger als sync_interval_min Minuten, oder laufendes Turnier
         return
 
     # Prüfe ob leer
@@ -102,37 +109,56 @@ def lade_aus_cloud(force=False):
             conn.commit()
 
         # Lade Tabellen aus Google Sheet und überschreibe lokale DB
+        fehler_aufgetreten = False
         for tabelle in ALL_TABLES:
-            # try:
-            df_sheet = sheets_conn.read(worksheet=tabelle, ttl=0)
-            if df_sheet is not None and not df_sheet.empty:
-                st.info(tabelle)
-                df_sheet.to_sql(tabelle, conn, if_exists="append", index=False)
-            # except Exception as e:
-                # st.error(f"❌ Fehler beim Laden der Tabelle '{tabelle}'! Versuche es später erneut.\n\n{e}")
-                # st.stop()  # Abbruch
+            try:
+                df_sheet = sheets_conn.read(worksheet=tabelle, ttl=0)
+                if df_sheet is not None and not df_sheet.empty:
+                    df_sheet.to_sql(tabelle, conn, if_exists="append", index=False)
+            except Exception as e:
+                fehler_aufgetreten = True
+                st.error(f"❌ Fehler beim Laden der Tabelle '{tabelle}'!")
 
-        # Timestamp aus Google Sheet speichern
+    # Timestamp aus Google Sheet speichern
+    if not fehler_aufgetreten:
         try:
             df_ts = sheets_conn.read(worksheet="timestamp", ttl=0)
             if df_ts is not None and not df_ts.empty and "timestamp" in df_ts.columns:
-                st.session_state.cloud_timestamp = str(df_ts["timestamp"].iloc[0])
+                new_ts = str(df_ts["timestamp"].iloc[0])
+                c = conn.cursor()
+                c.execute("""
+                    DELETE FROM cloud_timestamp;
+                """)
+                c.execute("""
+                    INSERT INTO cloud_timestamp (id, timestamp) 
+                    VALUES (1, ?);
+                """, (new_ts,))
+                conn.commit()
+            st.success("Laden erfolgreich!")
+            st.session_state.last_download = time.time()
         except:
-            pass
-
-    st.success("Laden erfolgreich!")
-    conn.commit()
-    st.session_state.last_download = time.time()
+            st.error("❌ Timestamp konnte nicht geladen werden. Lokale Datenbank wird gelöscht. Versuche es später erneut.")
+            conn.close()
+            sheets_conn.close()
+            os.remove("kario_mart_cache.db")
+            st.stop()
+    else:
+        st.error("❌ Laden war unvollständig! Lokale Datenbank wird gelöscht. Versuche es später erneut.")
+        conn.close()
+        sheets_conn.close()
+        os.remove("kario_mart_cache.db")
+        st.stop()
 
 def speichere_in_cloud(force=False, tabellen=None):
     """Lädt die lokale Datenbank in das Google Sheet. Abgesichert gegen Teil-Updates."""
     if tabellen is None:
         tabellen = ALL_TABLES
 
-    # Überlastungs-Schutz (10 Sekunden)
+    # Überlastungs-Schutz
     current_time = time.time()
-    if not force and (current_time - st.session_state.last_upload < 10):
-        st.warning("Nicht gespeichert, um die Cloud nicht zu überlasten. Versuche es später erneut.")
+    timeout_s = 10
+    if not force and (current_time - st.session_state.last_upload < timeout_s):
+        st.warning("⚠️ Nicht gespeichert, um die Cloud nicht zu überlasten. Versuche es später erneut.")
         return
 
     with st.spinner("💾 Speichere Daten in der Cloud..."):
@@ -148,22 +174,32 @@ def speichere_in_cloud(force=False, tabellen=None):
                 sheets_conn.update(worksheet=tabelle, data=df_sync)
             except:
                 fehler_aufgetreten = True
-                st.error(f"❌ Fehler beim Speichern der Tabelle '{tabelle}'! Versuche es später erneut.")
+                st.error(f"❌ Fehler beim Speichern der Tabelle '{tabelle}'!")
 
-        # Timestamp im Google Sheet aktualisieren
-        if not fehler_aufgetreten:
-            try:
-                berlin_tz = ZoneInfo("Europe/Berlin")
-                new_ts = datetime.now(tz=berlin_tz).strftime("%Y-%m-%d %H:%M:%S")
-                df_ts = pd.DataFrame({"timestamp": [new_ts]})
-                sheets_conn.update(worksheet="timestamp", data=df_ts)
-                st.session_state.cloud_timestamp = new_ts
-            except:
-                pass
+    # Timestamp aktualisieren
+    if not fehler_aufgetreten:
+        try:
+            berlin_tz = ZoneInfo("Europe/Berlin")
+            new_ts = datetime.now(tz=berlin_tz).strftime("%Y-%m-%d %H:%M:%S")
+            df_ts = pd.DataFrame({"timestamp": [new_ts]})
+            sheets_conn.update(worksheet="timestamp", data=df_ts)
+            c = conn.cursor()
+            c.execute("""
+                DELETE FROM cloud_timestamp;
+            """)
+            c.execute("""
+                INSERT INTO cloud_timestamp (id, timestamp) 
+                VALUES (1, ?);
+            """, (new_ts,))
+            conn.commit()
             st.success("Speichern erfolgreich!")
             st.session_state.last_upload = time.time()
-        else:
-            st.error("❌ Speichern war unvollständig! Versuche es später erneut.")
+        except:
+            st.error("❌ Timestamp konnte nicht gespeichert werden. Versuche es später erneut.")
+            st.stop()
+    else:
+        st.error("❌ Speichern war unvollständig! Versuche es später erneut.")
+        st.stop()
 
 def hat_duplikate(liste):
     """Prüft auf Duplikate."""
@@ -194,7 +230,7 @@ st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layou
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏁 **Turnier-Erfassung**", "👤 **Spieler**", "🗺️ **Strecken**", "⚔️ **Head-to-Head**", "📋 **Verlauf**"])
 
 # Markiere Session als initialisiert
-if not st.session_state.session_initialized: st.session_state.session_initialized = True
+# if not st.session_state.session_initialized: st.session_state.session_initialized = True
 
 # Sidebar
 with st.sidebar:
@@ -204,7 +240,7 @@ with st.sidebar:
         # Passwort-Abfrage
         st.write("**Passwort:**")
         passwort = st.text_input("Passwort", type="password", label_visibility="collapsed")
-        if st.button("Anmelden", type="secondary", use_container_width=True):
+        if st.button("Anmelden", type="secondary", width="stretch"):
             if passwort == st.secrets["passworte"]["admin_passwort"]:
                 st.session_state.authenticated = True
                 st.success("Anmeldung erfolgreich!")
@@ -216,7 +252,7 @@ with st.sidebar:
 
         # Anmeldung erfolgreich
         st.success("🔒 Angemeldet als Admin")
-        if st.button("Abmelden", type="secondary", use_container_width=True):
+        if st.button("Abmelden", type="secondary", width="stretch"):
             st.session_state.authenticated = False
             st.rerun()
 
@@ -226,7 +262,7 @@ with st.sidebar:
 
         # Lokale DB in Google Sheet speichern
         if not st.session_state.confirm_speichern:
-            if st.button("💾 Speichern", type="primary", use_container_width=True):
+            if st.button("💾 Speichern", type="primary", width="stretch"):
                 st.session_state.confirm_speichern = True
                 st.session_state.confirm_ueberschreiben = False
                 st.rerun()
@@ -234,19 +270,19 @@ with st.sidebar:
             st.error("⚠️ Lokale Daten in die Cloud speichern?")
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("Speichern", type="primary", key="btn_confirm_save", use_container_width=True):
+                if st.button("Ja", type="primary", key="btn_confirm_save", width="stretch"):
                     speichere_in_cloud(force=True)
                     st.session_state.confirm_speichern = False
                     time.sleep(2)
                     st.rerun()
             with c2:
-                if st.button("Abbrechen", key="btn_cancel_save", use_container_width=True):
+                if st.button("Abbrechen", key="btn_cancel_save", width="stretch"):
                     st.session_state.confirm_speichern = False
                     st.rerun()
 
         # Lokale DB mit Daten aus Google Sheet überschreiben
         if not st.session_state.confirm_ueberschreiben:
-            if st.button("🔄 Überschreiben", type="secondary", use_container_width=True):
+            if st.button("🔄 Laden", type="secondary", width="stretch"):
                 st.session_state.confirm_ueberschreiben = True
                 st.session_state.confirm_speichern = False
                 st.rerun()
@@ -254,13 +290,13 @@ with st.sidebar:
             st.error("⚠️ Lokale Daten mit denen aus der Cloud überschreiben?")
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("Überschreiben", type="primary", key="btn_confirm_load", use_container_width=True):
+                if st.button("Ja", type="primary", key="btn_confirm_load", width="stretch"):
                     lade_aus_cloud(force=True)
                     st.session_state.confirm_ueberschreiben = False
                     time.sleep(2)
                     st.rerun()
             with c2:
-                if st.button("Abbrechen", key="btn_cancel_load", use_container_width=True):
+                if st.button("Abbrechen", key="btn_cancel_load", width="stretch"):
                     st.session_state.confirm_ueberschreiben = False
                     st.rerun()
 
@@ -318,6 +354,12 @@ cursor.execute("""
         UNIQUE (turnier_id, spieler_name)
     );
 """)
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS cloud_timestamp (
+        id INTEGER PRIMARY KEY,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+""")
 conn.commit()
 
 # Sync
@@ -328,58 +370,59 @@ lade_aus_cloud(force=False)
 # 4. SEED-DATEN
 # ==========================================
 
-# Punkte-Mapping und Strecken-Daten falls noch nicht vorhanden
-cursor.execute("""
-    SELECT COUNT(*) 
-    FROM punkte_mapping;
-""")
-if cursor.fetchone()[0] == 0:
-    punkte_daten = [(1, 15), (2, 12), (3, 10), (4, 9), (5, 8), (6, 7), (7, 6), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
-    cursor.executemany("""
-        INSERT INTO punkte_mapping (platzierung, punkte) 
-        VALUES (?, ?);
-    """, punkte_daten)
-
-    spieler_daten = [("Anja",), ("Pfeiffer",), ("Markus",)]
-    cursor.executemany("""
-        INSERT INTO spieler (name) 
-        VALUES (?);
-    """, spieler_daten)
-
-    strecken_daten = [
-        ("Mario Kart-Stadion", "Pilz-Cup"), ("Wasserpark", "Pilz-Cup"), ("Zuckersüßer Canyon", "Pilz-Cup"), ("Steinblock-Ruinen", "Pilz-Cup"),
-        ("Marios Piste", "Blumen-Cup"), ("Toads Hafenstadt", "Blumen-Cup"), ("Gruselwusel-Villa", "Blumen-Cup"), ("Shy Guys Wasserfälle", "Blumen-Cup"),
-        ("Sonnenflughafen", "Stern-Cup"), ("Delfinlagune", "Stern-Cup"), ("Discodrom", "Stern-Cup"), ("Wario-Abfahrt", "Stern-Cup"),
-        ("Wolkenstraße", "Spezial-Cup"), ("Knochentrockene Dünen", "Spezial-Cup"), ("Bowsers Festung", "Spezial-Cup"), ("Regenbogen-Boulevard", "Spezial-Cup"),
-        ("Wii Kuhmuh-Weide", "Panzer-Cup"), ("GBA Marios Piste", "Panzer-Cup"), ("DS Cheep-Cheep-Strand", "Panzer-Cup"), ("N64 Toads Autobahn", "Panzer-Cup"),
-        ("GCN Staubtrockene Wüste", "Bananen-Cup"), ("SNES Donut-Ebene 3", "Bananen-Cup"), ("N64 Königliche Rennpiste", "Bananen-Cup"), ("3DS DK Dschungel", "Bananen-Cup"),
-        ("DS Wario-Arena", "Blatt-Cup"), ("GCN Sorbet-Land", "Blatt-Cup"), ("3DS Instrumentalpiste", "Blatt-Cup"), ("N64 Yoshi-Tal", "Blatt-Cup"),
-        ("DS Ticktack-Trauma", "Blitz-Cup"), ("3DS Röhrenraserei", "Blitz-Cup"), ("Wii Vulkangrollen", "Blitz-Cup"), ("N64 Regenbogen-Boulevard", "Blitz-Cup"),
-        ("GCN Yoshis Piste", "Ei-Cup"), ("Excitebike-Stadion", "Ei-Cup"), ("Große Drachenmauer", "Ei-Cup"), ("Mute City", "Ei-Cup"),
-        ("Wii Warios Goldmine", "Triforce-Cup"), ("SNES Regenbogen-Boulevard", "Triforce-Cup"), ("Polarkreis-Parcours", "Triforce-Cup"), ("Hyrule-Piste", "Triforce-Cup"),
-        ("GCN Baby-Park", "Crossing-Cup"), ("GBA Käseland", "Crossing-Cup"), ("Wilder Wipfelweg", "Crossing-Cup"), ("Animal Crossing-Dorf", "Crossing-Cup"),
-        ("3DS Koopa-Großstadtfieber", "Glocken-Cup"), ("GBA Party-Straße", "Glocken-Cup"), ("Marios-Metro", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
-        ("Tour Paris-Parcours", "Goldener Turbo-Cup"), ("3DS Toads Piste", "Goldener Turbo-Cup"), ("N64 Schoko-Sumpf", "Goldener Turbo-Cup"), ("Wii Kokos-Promenade", "Goldener Turbo-Cup"),
-        ("Tour Tokio-Tempotour", "Glückskatzen-Cup"), ("DS Pilz-Pass", "Glückskatzen-Cup"), ("GBA Wolkenpiste", "Glückskatzen-Cup"), ("Tour Ninja-Dojo", "Glückskatzen-Cup"),
-        ("Tour New-York-Speedway", "Rüben-Cup"), ("SNES Marios Piste 3", "Rüben-Cup"), ("N64 Kalimari-Wüste", "Rüben-Cup"), ("DS Waluigi-Flipper", "Rüben-Cup"),
-        ("Tour Sydney-Spritztour", "Propeller-Cup"), ("GBA Schneeland", "Propeller-Cup"), ("Wii Pilz-Schlucht", "Propeller-Cup"), ("Eiscreme-Eskapade", "Propeller-Cup"),
-        ("Tour London-Tour", "Fels-Cup"), ("GBA Buu-Huu-Tal", "Fels-Cup"), ("3DS Gebirgspfad", "Fels-Cup"), ("Wii Blätterwald", "Fels-Cup"),
-        ("Tour Pflaster von Berlin", "Mond-Cup"), ("DS Peachs Schlossgarten", "Mond-Cup"), ("Tour Bergbescherung", "Mond-Cup"), ("3DS Regenbogen-Boulevard", "Mond-Cup"),
-        ("Tour Ausfahrt Amsterdam", "Frucht-Cup"), ("GBA Flussufer-Park", "Frucht-Cup"), ("Wii DK Skikane", "Frucht-Cup"), ("Yoshis Eiland", "Frucht-Cup"),
-        ("Tour Bangkok-Abendrot", "Bumerang-Cup"), ("DS Marios Piste", "Bumerang-Cup"), ("GCN Waluigi-Arena", "Bumerang-Cup"), ("Tour Überholspur Singapur", "Bumerang-Cup"),
-        ("Tour Athen auf Abwegen", "Feder-Cup"), ("GCN Daisys Dampfer", "Feder-Cup"), ("Wii Mondblickstraße", "Feder-Cup"), ("Bad-Parcours", "Feder-Cup"),
-        ("Tour Los-Angeles-Strandpartie", "Doppelkirschen-Cup"), ("GBA Sonnenuntergangs-Wüste", "Doppelkirschen-Cup"), ("Wii Koopa-Kap", "Doppelkirschen-Cup"), ("Tour Vancouver-Wildpfad", "Doppelkirschen-Cup"),
-        ("Tour Rom-Rambazamba", "Eichel-Cup"), ("GCN DK-Bergland", "Eichel-Cup"), ("Wii Daisys Piste", "Eichel-Cup"), ("Tour Piranha-Pflanzen-Bucht", "Eichel-Cup"),
-        ("Tour Stadtrundfahrt Madrid", "Stachi-Cup"), ("3DS Rosalinas Eisplanet", "Stachi-Cup"), ("SNES Bowsers Festung 3", "Stachi-Cup"), ("Wii Regenbogen-Boulevard", "Stachi-Cup")
-    ]
-    cursor.executemany("""
-        INSERT INTO strecken (name, cup) 
-        VALUES (?, ?);
-    """, strecken_daten)
-    conn.commit()
-    speichere_in_cloud(force=True, tabellen=["spieler", "strecken", "punkte_mapping"])
-    time.sleep(2)
-    st.rerun()
+# Punkte-Mapping und Strecken-Daten in lokale DB falls noch nicht vorhanden
+# cursor.execute("""
+#     SELECT COUNT(*)
+#     FROM punkte_mapping;
+# """)
+# if cursor.fetchone()[0] == 0:
+#     punkte_daten = [(1, 15), (2, 12), (3, 10), (4, 9), (5, 8), (6, 7), (7, 6), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
+#     cursor.executemany("""
+#         INSERT INTO punkte_mapping (platzierung, punkte)
+#         VALUES (?, ?);
+#     """, punkte_daten)
+#
+#     spieler_daten = [("Anja",), ("Pfeiffer",), ("Markus",)]
+#     cursor.executemany("""
+#         INSERT INTO spieler (name)
+#         VALUES (?);
+#     """, spieler_daten)
+#
+#     strecken_daten = [
+#         ("Mario Kart-Stadion", "Pilz-Cup"), ("Wasserpark", "Pilz-Cup"), ("Zuckersüßer Canyon", "Pilz-Cup"), ("Steinblock-Ruinen", "Pilz-Cup"),
+#         ("Marios Piste", "Blumen-Cup"), ("Toads Hafenstadt", "Blumen-Cup"), ("Gruselwusel-Villa", "Blumen-Cup"), ("Shy Guys Wasserfälle", "Blumen-Cup"),
+#         ("Sonnenflughafen", "Stern-Cup"), ("Delfinlagune", "Stern-Cup"), ("Discodrom", "Stern-Cup"), ("Wario-Abfahrt", "Stern-Cup"),
+#         ("Wolkenstraße", "Spezial-Cup"), ("Knochentrockene Dünen", "Spezial-Cup"), ("Bowsers Festung", "Spezial-Cup"), ("Regenbogen-Boulevard", "Spezial-Cup"),
+#         ("Wii Kuhmuh-Weide", "Panzer-Cup"), ("GBA Marios Piste", "Panzer-Cup"), ("DS Cheep-Cheep-Strand", "Panzer-Cup"), ("N64 Toads Autobahn", "Panzer-Cup"),
+#         ("GCN Staubtrockene Wüste", "Bananen-Cup"), ("SNES Donut-Ebene 3", "Bananen-Cup"), ("N64 Königliche Rennpiste", "Bananen-Cup"), ("3DS DK Dschungel", "Bananen-Cup"),
+#         ("DS Wario-Arena", "Blatt-Cup"), ("GCN Sorbet-Land", "Blatt-Cup"), ("3DS Instrumentalpiste", "Blatt-Cup"), ("N64 Yoshi-Tal", "Blatt-Cup"),
+#         ("DS Ticktack-Trauma", "Blitz-Cup"), ("3DS Röhrenraserei", "Blitz-Cup"), ("Wii Vulkangrollen", "Blitz-Cup"), ("N64 Regenbogen-Boulevard", "Blitz-Cup"),
+#         ("GCN Yoshis Piste", "Ei-Cup"), ("Excitebike-Stadion", "Ei-Cup"), ("Große Drachenmauer", "Ei-Cup"), ("Mute City", "Ei-Cup"),
+#         ("Wii Warios Goldmine", "Triforce-Cup"), ("SNES Regenbogen-Boulevard", "Triforce-Cup"), ("Polarkreis-Parcours", "Triforce-Cup"), ("Hyrule-Piste", "Triforce-Cup"),
+#         ("GCN Baby-Park", "Crossing-Cup"), ("GBA Käseland", "Crossing-Cup"), ("Wilder Wipfelweg", "Crossing-Cup"), ("Animal Crossing-Dorf", "Crossing-Cup"),
+#         ("3DS Koopa-Großstadtfieber", "Glocken-Cup"), ("GBA Party-Straße", "Glocken-Cup"), ("Marios-Metro", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
+#         ("Tour Paris-Parcours", "Goldener Turbo-Cup"), ("3DS Toads Piste", "Goldener Turbo-Cup"), ("N64 Schoko-Sumpf", "Goldener Turbo-Cup"), ("Wii Kokos-Promenade", "Goldener Turbo-Cup"),
+#         ("Tour Tokio-Tempotour", "Glückskatzen-Cup"), ("DS Pilz-Pass", "Glückskatzen-Cup"), ("GBA Wolkenpiste", "Glückskatzen-Cup"), ("Tour Ninja-Dojo", "Glückskatzen-Cup"),
+#         ("Tour New-York-Speedway", "Rüben-Cup"), ("SNES Marios Piste 3", "Rüben-Cup"), ("N64 Kalimari-Wüste", "Rüben-Cup"), ("DS Waluigi-Flipper", "Rüben-Cup"),
+#         ("Tour Sydney-Spritztour", "Propeller-Cup"), ("GBA Schneeland", "Propeller-Cup"), ("Wii Pilz-Schlucht", "Propeller-Cup"), ("Eiscreme-Eskapade", "Propeller-Cup"),
+#         ("Tour London-Tour", "Fels-Cup"), ("GBA Buu-Huu-Tal", "Fels-Cup"), ("3DS Gebirgspfad", "Fels-Cup"), ("Wii Blätterwald", "Fels-Cup"),
+#         ("Tour Pflaster von Berlin", "Mond-Cup"), ("DS Peachs Schlossgarten", "Mond-Cup"), ("Tour Bergbescherung", "Mond-Cup"), ("3DS Regenbogen-Boulevard", "Mond-Cup"),
+#         ("Tour Ausfahrt Amsterdam", "Frucht-Cup"), ("GBA Flussufer-Park", "Frucht-Cup"), ("Wii DK Skikane", "Frucht-Cup"), ("Yoshis Eiland", "Frucht-Cup"),
+#         ("Tour Bangkok-Abendrot", "Bumerang-Cup"), ("DS Marios Piste", "Bumerang-Cup"), ("GCN Waluigi-Arena", "Bumerang-Cup"), ("Tour Überholspur Singapur", "Bumerang-Cup"),
+#         ("Tour Athen auf Abwegen", "Feder-Cup"), ("GCN Daisys Dampfer", "Feder-Cup"), ("Wii Mondblickstraße", "Feder-Cup"), ("Bad-Parcours", "Feder-Cup"),
+#         ("Tour Los-Angeles-Strandpartie", "Doppelkirschen-Cup"), ("GBA Sonnenuntergangs-Wüste", "Doppelkirschen-Cup"), ("Wii Koopa-Kap", "Doppelkirschen-Cup"), ("Tour Vancouver-Wildpfad", "Doppelkirschen-Cup"),
+#         ("Tour Rom-Rambazamba", "Eichel-Cup"), ("GCN DK-Bergland", "Eichel-Cup"), ("Wii Daisys Piste", "Eichel-Cup"), ("Tour Piranha-Pflanzen-Bucht", "Eichel-Cup"),
+#         ("Tour Stadtrundfahrt Madrid", "Stachi-Cup"), ("3DS Rosalinas Eisplanet", "Stachi-Cup"), ("SNES Bowsers Festung 3", "Stachi-Cup"), ("Wii Regenbogen-Boulevard", "Stachi-Cup")
+#     ]
+#     cursor.executemany("""
+#         INSERT INTO strecken (name, cup)
+#         VALUES (?, ?);
+#     """, strecken_daten)
+#
+#     conn.commit()
+#     speichere_in_cloud(force=True, tabellen=["spieler", "strecken", "punkte_mapping"])
+#     time.sleep(2)
+#     st.rerun()
 
 # Spieler und Strecken in alphabetischer Reihenfolge für Dropdowns
 df_spieler = pd.read_sql_query("""
@@ -424,17 +467,6 @@ with tab1:
                 if len(ausgewaehlte_namen) < 2:
                     st.error("❌ Ein Turnier erfordert mindestens 2 Spieler!")
                 else:
-                    berlin_tz = ZoneInfo("Europe/Berlin")
-                    current_timestamp = datetime.now(tz=berlin_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    # Neues Turnier in lokaler DB anlegen
-                    c = conn.cursor()
-                    c.execute("""
-                        INSERT INTO turniere (datum) 
-                        VALUES (?);
-                    """, (current_timestamp,))
-                    st.session_state.turnier_id = c.lastrowid
-                    conn.commit()
 
                     # Session-States setzen
                     st.session_state.gesamt_rennen = int(anzahl_rennen)
@@ -506,7 +538,7 @@ with tab1:
                     df_h2h_track = pd.read_sql_query(query_h2h_track, conn, params=params_h2h_track)
                     if not df_h2h_track.empty:
                         st.write("**Ø-Platz auf dieser Strecke:**")
-                        st.dataframe(df_h2h_track, hide_index=True, use_container_width=True)
+                        st.dataframe(df_h2h_track, hide_index=True, width="stretch")
                     else:
                         st.info("Keine gemeinsamen Rennen auf dieser Strecke.")
 
@@ -580,12 +612,6 @@ with tab1:
 
                 # Abbrechen
                 if st.button("❌ Abbrechen"):
-                    c = conn.cursor()
-                    c.execute("""
-                        DELETE FROM turniere 
-                        WHERE id = ?;
-                    """, (st.session_state.turnier_id,))
-                    conn.commit()
                     st.session_state.backup_rennen = {}
                     st.session_state.final_check_failed = False
                     st.session_state.turnier_aktiv = False
@@ -614,7 +640,7 @@ with tab1:
                     if pl in map_dict:
                         punkte_dict[name] += map_dict[pl]
 
-            # Segmented Control für Endplatzierung
+            # Endplatzierungen
             for name in aktive_namen:
                 val = ui_platzierung_auswahl(name, prefix_key="ep", custom_title=f"**{name}** ({punkte_dict[name]} Punkte)**:**")
                 if val in ["doppelt", "fehlt"]:
@@ -651,9 +677,19 @@ with tab1:
                     elif st.session_state.spielmodus == "Kario" and eingabe_fehler_bier:
                         st.error("❌ Für alle Spieler angeben, wann das Bier geleert wurde!")
                     else:
+                        lade_aus_cloud(force=False)
                         c = conn.cursor()
                         if "❌" in list(bier_finished.values()):
                             st.error("⚠️ Bier nicht geleert, Endplatzierung wird auf 12 gesetzt!")
+
+                        # Neues Turnier in lokaler DB anlegen
+                        berlin_tz = ZoneInfo("Europe/Berlin")
+                        current_timestamp = datetime.now(tz=berlin_tz).strftime("%Y-%m-%d %H:%M:%S")
+                        c.execute("""
+                            INSERT INTO turniere (datum) 
+                            VALUES (?);
+                        """, (current_timestamp,))
+                        st.session_state.turnier_id = c.lastrowid
 
                         for r_nr in range(1, st.session_state.gesamt_rennen + 1):
                             s_track = st.session_state.backup_rennen[f"track_{r_nr}"]
@@ -702,12 +738,6 @@ with tab1:
 
                 # Abbrechen
                 if st.button("Abbrechen"):
-                    c = conn.cursor()
-                    c.execute("""
-                        DELETE FROM turniere 
-                        WHERE id = ?;
-                    """, (st.session_state.turnier_id,))
-                    conn.commit()
                     st.session_state.warten_auf_endplatzierung = False
                     st.session_state.turnier_id = None
                     st.rerun()
@@ -751,7 +781,7 @@ with tab2:
                         st.error(f"⚠️ **{loesch_name}** unwiderruflich löschen?")
                         c_conf1, c_conf2 = st.columns(2)
                         with c_conf1:
-                            if st.button("Löschen", type="primary", use_container_width=True):
+                            if st.button("Löschen", type="primary", width="stretch"):
                                 c = conn.cursor()
                                 c.execute("""
                                     DELETE FROM spieler 
@@ -764,7 +794,7 @@ with tab2:
                                 time.sleep(2)
                                 st.rerun()
                         with c_conf2:
-                            if st.button("Abbrechen", use_container_width=True):
+                            if st.button("Abbrechen", width="stretch"):
                                 st.session_state.confirm_delete_spieler = None
                                 st.rerun()
 
@@ -1314,7 +1344,7 @@ with tab5:
                     st.error(f"⚠️ **Turnier #{ausgewaehltes_turnier}** unwiderruflich löschen?")
                     c_t1, c_t2 = st.columns(2)
                     with c_t1:
-                        if st.button("Löschen", type="primary", key=f"btn_del_confirm_{ausgewaehltes_turnier}", use_container_width=True):
+                        if st.button("Löschen", type="primary", key=f"btn_del_confirm_{ausgewaehltes_turnier}", width="stretch"):
                             c = conn.cursor()
                             c.execute("""
                                 DELETE FROM turniere 
@@ -1327,8 +1357,6 @@ with tab5:
                             time.sleep(2)
                             st.rerun()
                     with c_t2:
-                        if st.button("Abbrechen", key=f"btn_del_cancel_{ausgewaehltes_turnier}", use_container_width=True):
+                        if st.button("Abbrechen", key=f"btn_del_cancel_{ausgewaehltes_turnier}", width="stretch"):
                             st.session_state.confirm_delete_turnier = None
                             st.rerun()
-
-conn.close()
