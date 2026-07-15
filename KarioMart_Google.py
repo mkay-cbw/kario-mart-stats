@@ -106,7 +106,7 @@ def lade_aus_cloud(force=False):
             # try:
             df_sheet = sheets_conn.read(worksheet=tabelle, ttl=0)
             if df_sheet is not None and not df_sheet.empty:
-                df_sheet.to_sql(tabelle, conn, if_exists="append", index=False)
+                df_sheet.to_sql(tabelle, conn, if_exists="replace", index=False)
             # except Exception as e:
                 # st.error(f"❌ Fehler beim Laden der Tabelle '{tabelle}'! Versuche es später erneut.\n\n{e}")
                 # st.stop()  # Abbruch
