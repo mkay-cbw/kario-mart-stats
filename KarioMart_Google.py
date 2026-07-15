@@ -108,8 +108,9 @@ def lade_aus_cloud(force=False):
                 if df_sheet is not None and not df_sheet.empty:
                     df_sheet.to_sql(tabelle, conn, if_exists="append", index=False)
             except Exception as e:
-                st.error(f"❌ Fehler beim Laden der Tabelle '{tabelle}'! Versuche es später erneut.\n\n{e}")
-                st.stop()  # Abbruch
+                pass
+                # st.error(f"❌ Fehler beim Laden der Tabelle '{tabelle}'! Versuche es später erneut.\n\n{e}")
+                # st.stop()  # Abbruch
 
         # Timestamp aus Google Sheet speichern
         try:
