@@ -16,9 +16,6 @@ ALL_TABLES = ["spieler", "strecken", "punkte_mapping", "turniere", "rennen", "re
 DB_FILE = "kario_mart_cache.db"
 conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=20)
 cursor = conn.cursor()
-cursor.execute("""
-    PRAGMA foreign_keys = ON;
-""")
 sheets_conn = st.connection("gsheets", type=GSheetsConnection)
 
 
@@ -28,7 +25,6 @@ sheets_conn = st.connection("gsheets", type=GSheetsConnection)
 
 # Authentifizierung & Timestamps
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
-if "session_initialized" not in st.session_state: st.session_state.session_initialized = False
 if "last_upload" not in st.session_state: st.session_state.last_upload = 0
 if "last_download" not in st.session_state: st.session_state.last_download = 0
 
@@ -79,7 +75,7 @@ def lade_aus_cloud(force=False):
 
     # Alle sync_interval_min Minuten
     current_time = time.time()
-    sync_interval_min = 5
+    sync_interval_min = 3
     if (not force and (current_time - st.session_state.last_download < sync_interval_min * 60)) or (st.session_state.turnier_aktiv and not st.session_state.warten_auf_endplatzierung):  # Kein force und weniger als sync_interval_min Minuten, oder laufendes Turnier
         return
 
@@ -229,9 +225,6 @@ def ui_platzierung_auswahl(name, prefix_key, default_val=None, custom_title=None
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏁 **Turnier-Erfassung**", "👤 **Spieler**", "🗺️ **Strecken**", "⚔️ **Head-to-Head**", "📋 **Verlauf**"])
 
-# Markiere Session als initialisiert
-# if not st.session_state.session_initialized: st.session_state.session_initialized = True
-
 # Sidebar
 with st.sidebar:
     st.subheader("🔒 Admin-Bereich")
@@ -301,6 +294,9 @@ with st.sidebar:
                     st.rerun()
 
 # Initialisierung Tabellen
+cursor.execute("""
+    PRAGMA foreign_keys = ON;
+""")
 cursor.execute("""
     CREATE TABLE IF NOT EXISTS spieler (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -1080,21 +1076,21 @@ with tab4:
             c1, c2 = st.columns(2)
             with c1:
                 st.write("**Rennsiege**")
-                st.bar_chart(df_h2h_r.groupby("spieler")["ist_rennsieg"].sum().reset_index().set_index("spieler"))
+                st.bar_chart(df_h2h_r.groupby("spieler")["ist_rennsieg"].sum().reset_index().set_index("spieler"), color="#FF4B4B")
                 st.write("**Ø-Platz Rennen ↓**")
-                st.bar_chart(df_h2h_r.groupby("spieler")["platzierung"].mean().reset_index().set_index("spieler"))
+                st.bar_chart(df_h2h_r.groupby("spieler")["platzierung"].mean().reset_index().set_index("spieler"), color="#FF4B4B")
                 st.write("**Ø-Punkte / Rennen**")
-                st.bar_chart(df_h2h_r.groupby("spieler")["punkte"].mean().reset_index().set_index("spieler"))
+                st.bar_chart(df_h2h_r.groupby("spieler")["punkte"].mean().reset_index().set_index("spieler"), color="#FF4B4B")
 
             with c2:
                 if h2h_strecke == "Alle Strecken":
                     if not df_h2h_t.empty:
                         st.write("**Turniersiege**")
-                        st.bar_chart(df_h2h_t.groupby("spieler")["ist_turniersieg"].sum().reset_index().set_index("spieler"))
+                        st.bar_chart(df_h2h_t.groupby("spieler")["ist_turniersieg"].sum().reset_index().set_index("spieler"), color="#FF4B4B")
                         st.write("**Ø-Platz Turnier ↓**")
-                        st.bar_chart(df_h2h_t.groupby("spieler")["endplatzierung"].mean().reset_index().set_index("spieler"))
+                        st.bar_chart(df_h2h_t.groupby("spieler")["endplatzierung"].mean().reset_index().set_index("spieler"), color="#FF4B4B")
                         st.write("**Ø-Punkte / Turnier**")
-                        st.bar_chart(df_h2h_t.groupby("spieler")["turnier_punkte"].mean().reset_index().set_index("spieler"))
+                        st.bar_chart(df_h2h_t.groupby("spieler")["turnier_punkte"].mean().reset_index().set_index("spieler"), color="#FF4B4B")
                 else:
                     st.info("Turnier-Metriken bei Streckenfilter ausgeblendet.")
 
