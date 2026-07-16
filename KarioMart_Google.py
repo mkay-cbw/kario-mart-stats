@@ -48,6 +48,10 @@ if "confirm_delete_turnier" not in st.session_state: st.session_state.confirm_de
 if "confirm_speichern" not in st.session_state: st.session_state.confirm_speichern = False
 if "confirm_ueberschreiben" not in st.session_state: st.session_state.confirm_ueberschreiben = False
 
+# Trigger für Sidebar-Buttons
+if "execute_save" not in st.session_state: st.session_state.execute_save = False
+if "execute_load" not in st.session_state: st.session_state.execute_load = False
+
 
 # ==========================================
 # 2. HILFSFUNKTIONEN
@@ -264,9 +268,8 @@ with st.sidebar:
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("Ja", type="primary", key="btn_confirm_save", width="stretch"):
-                    speichere_in_cloud(force=True)
                     st.session_state.confirm_speichern = False
-                    time.sleep(2)
+                    st.session_state.execute_save = True
                     st.rerun()
             with c2:
                 if st.button("Abbrechen", key="btn_cancel_save", width="stretch"):
@@ -284,14 +287,25 @@ with st.sidebar:
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("Ja", type="primary", key="btn_confirm_load", width="stretch"):
-                    lade_aus_cloud(force=True)
                     st.session_state.confirm_ueberschreiben = False
-                    time.sleep(2)
+                    st.session_state.execute_load = True
                     st.rerun()
             with c2:
                 if st.button("Abbrechen", key="btn_cancel_load", width="stretch"):
                     st.session_state.confirm_ueberschreiben = False
                     st.rerun()
+
+        # Cloud Operationen
+        if st.session_state.execute_save:
+            speichere_in_cloud(force=True)
+            st.session_state.execute_save = False
+            time.sleep(2)
+            st.rerun()
+        if st.session_state.execute_load:
+            lade_aus_cloud(force=True)
+            st.session_state.execute_load = False
+            time.sleep(2)
+            st.rerun()
 
 # Initialisierung Tabellen
 cursor.execute("""
