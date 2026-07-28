@@ -1,4 +1,3 @@
 pandas
 streamlit
-streamlit-scroll-to-top
-st-gsheets-connection
+psycopg2-binary
