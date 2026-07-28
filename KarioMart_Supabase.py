@@ -1101,4 +1101,96 @@ with tab5:
                         curr_track_name = curr_race[0]
                         picker_name_db = curr_race[1]
 
-                        st.write("**")
+                        st.write("**Strecke:**")
+                        track_index = all_track_names.index(curr_track_name) if curr_track_name in all_track_names else 0
+                        edit_track_name = st.selectbox("Strecke", all_track_names, index=track_index, key=f"edit_track_{race_id}", label_visibility="collapsed")
+
+                        df_race_placements = pd.read_sql_query("""
+                            SELECT player_name, placement 
+                            FROM race_results 
+                            WHERE race_id = %s;
+                        """, conn, params=(race_id,))
+                        
+                        race_players = df_race_placements['player_name'].tolist()
+
+                        edit_picked_by_name = None
+                        if picker_name_db is not None or st.session_state.get("selection_mode") == "Auswahl":
+                            st.write("**Gewählt von:**")
+                            picker_index = race_players.index(picker_name_db) if picker_name_db in race_players else 0
+                            edit_picked_by_name = st.selectbox("Gewählt von", race_players, index=picker_index, key=f"edit_picker_{race_id}", label_visibility="collapsed")
+                        
+                        st.write("---")
+                        st.write("**Platzierungen:**")
+
+                        edited_race_placements = {}
+                        is_race_error = False
+                        has_duplicate_race = False
+
+                        for _, p_row in df_race_placements.iterrows():
+                            val = ui_placement_selection(p_row['player_name'], prefix_key=f"edit_r_{race_id}", default_val=int(p_row['placement']))
+                            
+                            if val in ["doppelt", "fehlt"]:
+                                is_race_error = True
+                            else:
+                                edited_race_placements[p_row['player_name']] = int(val)
+                                
+                        if not is_race_error and has_duplicates(list(edited_race_placements.values())):
+                            is_race_error = True
+                            has_duplicate_race = True
+
+                        if st.button("Rennen aktualisieren", key=f"btn_update_race_{race_id}"):
+                            if is_race_error and not has_duplicate_race:
+                                st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
+                            elif has_duplicate_race:
+                                st.error("❌ Doppelte Platzierung!")
+                            else:
+                                cur = conn.cursor()
+                                
+                                cur.execute("""
+                                    UPDATE races 
+                                    SET track_name = %s, picked_by_name = %s 
+                                    WHERE id = %s;
+                                """, (edit_track_name, edit_picked_by_name, race_id))
+
+                                for p_name, new_place in edited_race_placements.items():
+                                    cur.execute("""
+                                        UPDATE race_results 
+                                        SET placement = %s 
+                                        WHERE race_id = %s AND player_name = %s;
+                                    """, (new_place, race_id, p_name))
+
+                                conn.commit()
+                                st.success("Rennen aktualisiert!")
+                                time.sleep(2)
+                                st.rerun()
+
+            st.divider()
+
+            # --- Delete Tournament Section ---
+            st.write("##### Turnier löschen")
+            if st.session_state.get("confirm_delete_tournament") != selected_tournament_id:
+                if st.button("🗑️ Dieses Turnier löschen", type="secondary"):
+                    st.session_state.confirm_delete_tournament = selected_tournament_id
+                    st.rerun()
+            else:
+                st.error(f"⚠️ **Turnier {selected_tournament_id}** unwiderruflich löschen?")
+                c_conf1, c_conf2 = st.columns(2)
+                
+                with c_conf1:
+                    if st.button("Löschen bestätigen", type="primary", width="stretch"):
+                        cur = conn.cursor()
+                        cur.execute("""
+                            DELETE FROM tournaments 
+                            WHERE id = %s;
+                        """, (selected_tournament_id,))
+                        conn.commit()
+                        
+                        st.session_state.confirm_delete_tournament = None
+                        st.success("Turnier gelöscht!")
+                        time.sleep(2)
+                        st.rerun()
+                        
+                with c_conf2:
+                    if st.button("Abbrechen", width="stretch"):
+                        st.session_state.confirm_delete_tournament = None
+                        st.rerun()
