@@ -48,8 +48,8 @@ if "backup_races" not in st.session_state:
     st.session_state.backup_races = {}
 if "final_check_failed" not in st.session_state:
     st.session_state.final_check_failed = False
-if "waiting_for_final_placement" not in st.session_state:
-    st.session_state.waiting_for_final_placement = False
+if "waiting_for_placement" not in st.session_state:
+    st.session_state.waiting_for_placement = False
 
 # Security prompts
 if "confirm_delete_player" not in st.session_state:
@@ -78,14 +78,14 @@ def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None
     place2 = st.segmented_control("Platz 7-12", options=[7, 8, 9, 10, 11, 12], default=val2, key=f"seg2_{prefix_key}_{name}", label_visibility="collapsed")
 
     if (place1 is not None) and (place2 is not None):
-        return "duplicate"
+        return "two_positions"
     if (place1 is None) and (place2 is None):
         return "missing"
 
     return place1 if place1 is not None else place2
 
 # ==========================================
-# 4. CACHed FUNCTIONS
+# 4. CACHED FUNCTIONS
 # ==========================================
 @st.cache_data
 def get_points_mapping_count():
@@ -105,12 +105,13 @@ def get_df_tracks():
     return pd.read_sql_query("SELECT * FROM tracks ORDER BY name ASC;", conn)
 
 @st.cache_data
-def get_df_h2h_track(track_name, active_players):
-    placeholders = ",".join(["%s"] * len(active_names))
+def get_df_h2h_track(track_name, players):
+    placeholders = ",".join(["%s"] * len(players))
     query = f"""
         SELECT 
             rr.player_name as "Spieler", 
-            ROUND(AVG(rr.placement), 2) as "Ø-Platz" 
+            ROUND(AVG(rr.placement), 2) as "Ø-Platz",
+            COUNT(rr.race_id) as "race_count"
         FROM race_results rr 
         JOIN races r ON rr.race_id = r.id 
         WHERE r.track_name = %s 
@@ -122,23 +123,31 @@ def get_df_h2h_track(track_name, active_players):
         AND rr.player_name IN ({placeholders}) 
         GROUP BY rr.player_name ORDER BY AVG(rr.placement) ASC;
     """
-    params = [track_name] + list(active_players) + [len(active_players)] + list(active_players)
-    return pd.read_sql_query(query, conn, params=params)
+    params = [track_name] + list(players) + [len(players)] + list(players)
+    df = pd.read_sql_query(query, conn, params=params)
+
+    shared_races = 0
+    if not df.empty:
+        shared_races = int(df["race_count"].iloc[0])
+        df = df.drop(columns=["race_count"])
+
+    return df, shared_races
 
 @st.cache_data
-def get_df_avg_track(track_name, active_players):
-    placeholders = ",".join(["%s"] * len(active_names))
+def get_df_avg_track(track_name, players):
+    placeholders = ",".join(["%s"] * len(players))
     query = f"""
         SELECT 
             rr.player_name as "Spieler", 
-            ROUND(AVG(rr.placement), 2) as "Ø-Platz" 
+            ROUND(AVG(rr.placement), 2) as "Ø-Platz",
+            COUNT(rr.id) as "Gefahren" 
         FROM race_results rr 
         JOIN races r ON rr.race_id = r.id 
         WHERE r.track_name = %s 
         AND rr.player_name IN ({placeholders}) 
         GROUP BY rr.player_name ORDER BY AVG(rr.placement) ASC;
     """
-    params = [track_name] + list(active_players)
+    params = [track_name] + list(players)
     return pd.read_sql_query(query, conn, params=params)
 
 @st.cache_data
@@ -220,12 +229,12 @@ def get_track_stats(selected_track):
 
     query_most_picked = f"""
         SELECT 
-            picked_by_name as name, 
-            COUNT(*) as c 
+            picked_by_name as "Spieler", 
+            COUNT(*) as "Gewählt" 
         FROM races 
         WHERE track_name = %s 
         AND picked_by_name IS NOT NULL 
-        GROUP BY picked_by_name ORDER BY c DESC LIMIT 1;
+        GROUP BY "Spieler" ORDER BY "Gewählt" DESC LIMIT 5;
     """
     df_most_picked = pd.read_sql_query(query_most_picked, conn, params=(selected_track,))
 
@@ -267,8 +276,8 @@ def get_track_stats(selected_track):
     return df_play_count, df_most_picked, df_placement, df_points, df_wins
 
 @st.cache_data
-def get_h2h_data(rivals_tuple, h2h_track, h2h_mode):
-    h2h_placeholders = ",".join(["%s"] * len(rivals_tuple))
+def get_h2h_data(players, h2h_track, h2h_mode):
+    h2h_placeholders = ",".join(["%s"] * len(players))
     h2h_kario_cond = " AND tr.kario = 1" if h2h_mode == "Kario" else (" AND tr.kario = 0" if h2h_mode == "Mario" else "")
     subquery_shared = f"""
         SELECT r.tournament_id 
@@ -295,7 +304,7 @@ def get_h2h_data(rivals_tuple, h2h_track, h2h_mode):
         {track_condition} 
         {h2h_kario_cond};
     """
-    params_r = list(rivals_tuple) + [len(rivals_tuple)] + list(rivals_tuple)
+    params_r = list(players) + [len(players)] + list(players)
     if h2h_track != "Alle Strecken":
         params_r.append(h2h_track)
     df_r = pd.read_sql_query(query_h2h_r, conn, params=params_r)
@@ -318,10 +327,79 @@ def get_h2h_data(rivals_tuple, h2h_track, h2h_mode):
         AND tr.player_name IN ({h2h_placeholders}) 
         {h2h_kario_cond};
     """
-    params_t = list(rivals_tuple) + [len(rivals_tuple)] + list(rivals_tuple)
+    params_t = list(players) + [len(players)] + list(players)
     df_t = pd.read_sql_query(query_h2h_t, conn, params=params_t)
 
     return df_r, df_t
+
+@st.cache_data
+def get_tournament_edit_data(tournament_id):
+    df_placements = pd.read_sql_query("""
+        SELECT 
+            player_name, 
+            final_placement 
+        FROM tournament_results 
+        WHERE tournament_id = %s;
+    """, conn, params=(tournament_id,))
+
+    df_points = pd.read_sql_query("""
+        SELECT 
+            rr.player_name, 
+            SUM(pm.points) as total_points 
+        FROM race_results rr 
+        JOIN races r ON rr.race_id = r.id 
+        JOIN points_mapping pm ON rr.placement = pm.placement 
+        WHERE r.tournament_id = %s 
+        GROUP BY rr.player_name;
+    """, conn, params=(tournament_id,))
+
+    df_beer = pd.read_sql_query("""
+        SELECT 
+            player_name, 
+            beer_finished_after, 
+            kario 
+        FROM tournament_results 
+        WHERE tournament_id = %s;
+    """, conn, params=(tournament_id,))
+
+    df_race_count = pd.read_sql_query("""
+        SELECT COUNT(*) as c 
+        FROM races 
+        WHERE tournament_id = %s;
+    """, conn, params=(tournament_id,))
+    num_races = int(df_race_count['c'].iloc[0]) if not df_race_count.empty else 1
+
+    df_race_list = pd.read_sql_query("""
+        SELECT 
+            id as race_id, 
+            track_name 
+        FROM races 
+        WHERE tournament_id = %s;
+    """, conn, params=(tournament_id,))
+
+    return df_placements, df_points, df_beer, num_races, df_race_list
+
+@st.cache_data
+def get_race_edit_data(race_id):
+    df_race_info = pd.read_sql_query("""
+        SELECT 
+            track_name, 
+            picked_by_name 
+        FROM races 
+        WHERE id = %s;
+    """, conn, params=(race_id,))
+    track_name = df_race_info['track_name'].iloc[0] if not df_race_info.empty else None
+    picked_by = df_race_info['picked_by_name'].iloc[0] if not df_race_info.empty else None
+
+    df_placements = pd.read_sql_query("""
+        SELECT 
+            player_name, 
+            placement 
+        FROM race_results 
+        WHERE race_id = %s;
+    """, conn, params=(race_id,))
+
+    return track_name, picked_by, df_placements
 
 @st.cache_data
 def get_history_list():
@@ -334,7 +412,13 @@ def get_history_list():
         JOIN tournament_results tr ON t.id = tr.tournament_id 
         GROUP BY t.id, t.date ORDER BY t.id DESC;
     """
-    return pd.read_sql_query(query, conn)
+    df =  pd.read_sql_query(query, conn)
+
+    if not df.empty:
+        df.insert(0, "Turnier-Nr.", range(len(df), 0, -1))
+        df = df.sort_values(by="Turnier-ID", ascending=False).reset_index(drop=True)
+
+    return df
 
 
 # ==========================================
@@ -481,7 +565,7 @@ if points_mapping_count == 0:
     st.cache_data.clear()
     st.rerun()
 
-# Retrieve players and tracks in alphabetical order for dropdowns
+# Get players and tracks for dropdowns
 df_players = get_df_players()
 df_tracks = get_df_tracks()
 
@@ -495,7 +579,7 @@ with tab1:
     else:
 
         # Tournament setup
-        if not st.session_state.tournament_active and not st.session_state.waiting_for_final_placement:
+        if not st.session_state.tournament_active and not st.session_state.waiting_for_placement:
             st.write("##### Setup")
 
             st.write("**Spieler:**")
@@ -526,10 +610,10 @@ with tab1:
                     st.rerun()
 
         # Races
-        elif st.session_state.tournament_active and not st.session_state.waiting_for_final_placement:
+        elif st.session_state.tournament_active and not st.session_state.waiting_for_placement:
 
             st.write("##### Rennplatzierungen")
-            active_names = st.session_state.active_players
+            active_players = st.session_state.active_players
             all_races_valid = True
             first_invalid_race = None
 
@@ -549,31 +633,31 @@ with tab1:
 
                     # Track
                     all_track_names = df_tracks["name"].tolist()
-                    saved_track = st.session_state.backup_races.get(f"track_{race_num}", all_track_names[0])
-                    track_index = all_track_names.index(saved_track) if saved_track in all_track_names else 0
+                    saved_track = st.session_state.backup_races.get(f"track_{race_num}", None)
+                    track_index = all_track_names.index(saved_track) if saved_track in all_track_names else None
 
                     st.write("**Strecke:**")
-                    track_name = st.selectbox("Strecke", all_track_names, index=track_index, key=f"track_{race_num}", label_visibility="collapsed")
+                    track_name = st.selectbox("Strecke", all_track_names, index=track_index, key=f"track_{race_num}", label_visibility="collapsed", placeholder="")
 
                     picked_by_name = None
                     if st.session_state.selection_mode == "Auswahl":
-                        saved_picker = st.session_state.backup_races.get(f"picker_{race_num}", active_names[0])
-                        picker_index = active_names.index(saved_picker) if saved_picker in active_names else 0
-
+                        saved_picker = st.session_state.backup_races.get(f"picker_{race_num}", None)
+                        picker_index = active_players.index(saved_picker) if saved_picker in active_players else None
                         st.write("**Gewählt von:**")
-                        picked_by_name = st.selectbox("Gewählt von", active_names, index=picker_index, key=f"picker_{race_num}", label_visibility="collapsed")
+                        picked_by_name = st.selectbox("Gewählt von", active_players, index=picker_index, key=f"picker_{race_num}", label_visibility="collapsed", placeholder="")
 
                     # Head-to-Head
-                    df_h2h_track = get_df_h2h_track(track_name, active_names)
+                    df_h2h_track, shared_races = get_df_h2h_track(track_name, tuple(active_players))
                     if not df_h2h_track.empty:
-                        st.write("**Ø-Platz bei gemeinsamen Rennen:**")
+                        st.write("**Ø-Platz (H2H):**")
+                        st.write(f"Gemeinsame Rennen: {shared_races}")
                         st.dataframe(df_h2h_track, hide_index=True, width="stretch")
                     else:
-                        df_avg_track = get_df_avg_track(track_name, tuple(active_names))
+                        df_avg_track = get_df_avg_track(track_name, tuple(active_players))
                         if not df_avg_track.empty:
-                            st.write("**Individueller Ø-Platz:**")
+                            st.write("**Ø-Platz (Individuell):**")
                             st.dataframe(df_avg_track, hide_index=True, width="stretch")
-                        else:
+                        elif track_name is not None:
                             st.info("Keine Statistiken für diese Strecke vorhanden.")
 
                     st.write("---")
@@ -581,21 +665,21 @@ with tab1:
                     # Placements
                     st.write("**Platzierungen:**")
                     placements = {}
-                    local_error = False
-                    input_error = False
+                    error = False
+                    ui_error = False
                     duplicate = False
-                    for name in active_names:
+                    for name in active_players:
                         saved_placement = st.session_state.backup_races.get(f"placement_{race_num}_{name}", None)
                         val = ui_placement_selection(name, prefix_key=f"r_{race_num}", default_val=saved_placement)
-                        if val in ["duplicate", "missing"]:
-                            local_error = True
-                            input_error = True
+                        if val in ["two_positions", "missing"]:
+                            error = True
+                            ui_error = True
                         else:
                             placements[name] = int(val)
-                    if not input_error and has_duplicates(list(placements.values())):
-                        local_error = True
+                    if not ui_error and has_duplicates(list(placements.values())):
+                        error = True
                         duplicate = True
-                    if local_error:
+                    if error:
                         all_races_valid = False
                         if first_invalid_race is None:
                             first_invalid_race = race_num
@@ -605,7 +689,7 @@ with tab1:
                         if race_num < st.session_state.total_races:
                             st.write("---")
                             if st.button(f"Weiter", key=f"btn_next_{race_num}"):
-                                if input_error:
+                                if ui_error:
                                     st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                                 elif duplicate:
                                     st.error("❌ Doppelte Platzierung!")
@@ -629,17 +713,20 @@ with tab1:
                     else:
                         st.session_state.final_check_failed = False
                         st.session_state.backup_races = {}
+
+                        # Backup
                         for race in range(1, st.session_state.total_races + 1):
                             st.session_state.backup_races[f"track_{race}"] = st.session_state[f"track_{race}"]
                             if st.session_state.selection_mode == "Auswahl":
                                 st.session_state.backup_races[f"picker_{race}"] = st.session_state[f"picker_{race}"]
-                            for name in active_names:
+                            for name in active_players:
                                 p1 = st.session_state.get(f"seg1_r_{race}_{name}")
                                 p2 = st.session_state.get(f"seg2_r_{race}_{name}")
                                 placement_val = p1 if p1 is not None else p2
                                 st.session_state.backup_races[f"placement_{race}_{name}"] = int(placement_val) if placement_val is not None else None
+
                         st.session_state.tournament_active = False
-                        st.session_state.waiting_for_final_placement = True
+                        st.session_state.waiting_for_placement = True
                         st.rerun()
 
             with col_cancel:
@@ -653,28 +740,28 @@ with tab1:
                     st.rerun()
 
         # Finalize tournament
-        elif st.session_state.waiting_for_final_placement:
+        elif st.session_state.waiting_for_placement:
             st.write("##### Turnier-Endplatzierungen")
-            active_names = st.session_state.active_players
+            active_players = st.session_state.active_players
             final_placements = {}
             beer_finished = {}
-            input_error = False
-            input_error_beer = False
+            ui_error = False
+            ui_error_beer = False
 
             # Total points
-            points_dict = {name: 0 for name in active_names}
+            points_dict = {name: 0 for name in active_players}
             points_mapping = get_points_mapping()
             for race in range(1, st.session_state.total_races + 1):
-                for name in active_names:
+                for name in active_players:
                     placement = st.session_state.backup_races.get(f"placement_{race}_{name}")
                     if placement in points_mapping:
                         points_dict[name] += points_mapping[placement]
 
             # Tournament placements
-            for name in active_names:
+            for name in active_players:
                 val = ui_placement_selection(name, prefix_key="fp", custom_title=f"**{name}** ({points_dict[name]} Punkte)**:**")
-                if val in ["duplicate", "missing"]:
-                    input_error = True
+                if val in ["two_positions", "missing"]:
+                    ui_error = True
                 else:
                     final_placements[name] = int(val)
 
@@ -682,13 +769,13 @@ with tab1:
             if st.session_state.game_mode == "Kario":
                 st.write("---")
                 st.write("##### Bier")
-                for name in active_names:
+                for name in active_players:
                     st.write(f"**{name}:**")
                     beer_options = list(range(1, st.session_state.total_races + 1))
                     beer_options.append("❌")
                     beer_val = st.segmented_control(f"Beer_{name}", options=beer_options, key=f"beer_fp_{name}", label_visibility="collapsed")
                     if beer_val is None:
-                        input_error_beer = True
+                        ui_error_beer = True
                     else:
                         if beer_val == "❌":
                             beer_finished[name] = "❌"
@@ -697,27 +784,31 @@ with tab1:
 
             st.divider()
 
-            col1, col2 = st.columns([3, 1])
-            with col1:
+            col_finalize, col_cancel = st.columns([3, 1])
+            with col_finalize:
 
-                # Save
+                # Finalize
                 if st.button("Abschließen", type="primary"):
-                    if input_error:
+                    if ui_error:
                         st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
-                    elif st.session_state.game_mode == "Kario" and input_error_beer:
+                    elif st.session_state.game_mode == "Kario" and ui_error_beer:
                         st.error("❌ Für alle Spieler angeben, wann das Bier geleert wurde!")
                     else:
                         cur = conn.cursor()
                         if "❌" in list(beer_finished.values()):
                             st.error("⚠️ Bier nicht geleert, Endplatzierung wird auf 12 gesetzt!")
+
+                        # "tournaments" table
                         berlin_tz = ZoneInfo("Europe/Berlin")
                         current_timestamp = datetime.now(tz=berlin_tz).strftime("%Y-%m-%d %H:%M:%S")
-                        cur.execute("""
+                        tournament_id = cur.execute("""
                             INSERT INTO tournaments (date) 
                             VALUES (%s)
                             RETURNING id;
                         """, (current_timestamp,))
                         st.session_state.tournament_id = cur.fetchone()[0]
+
+                        # "races" table
                         for race_num in range(1, st.session_state.total_races + 1):
                             saved_track = st.session_state.backup_races[f"track_{race_num}"]
                             saved_picker = st.session_state.backup_races.get(f"picker_{race_num}", None)
@@ -727,12 +818,16 @@ with tab1:
                                 RETURNING id;
                             """, (st.session_state.tournament_id, saved_track, saved_picker))
                             race_id = cur.fetchone()[0]
-                            for name in active_names:
+
+                            # "race_results" table
+                            for name in active_players:
                                 placement = st.session_state.backup_races[f"placement_{race_num}_{name}"]
                                 cur.execute("""
                                     INSERT INTO race_results (race_id, player_name, placement) 
                                     VALUES (%s, %s, %s);
                                 """, (race_id, name, int(placement)))
+
+                        # "tournament_results" table
                         kario_val = 1 if st.session_state.game_mode == "Kario" else 0
                         for player_name, final_place in final_placements.items():
                             beer_val = beer_finished.get(player_name, None)
@@ -743,19 +838,20 @@ with tab1:
                                 INSERT INTO tournament_results (tournament_id, player_name, final_placement, beer_finished_after, kario) 
                                 VALUES (%s, %s, %s, %s, %s);
                             """, (st.session_state.tournament_id, player_name, final_place, beer_val, kario_val))
+
                         conn.commit()
                         st.cache_data.clear()
                         st.session_state.backup_races = {}
-                        st.session_state.waiting_for_final_placement = False
+                        st.session_state.waiting_for_placement = False
                         st.session_state.tournament_id = None
                         time.sleep(2)
                         st.rerun()
 
-            with col2:
+            with col_cancel:
 
                 # Back
                 if st.button("Zurück"):
-                    st.session_state.waiting_for_final_placement = False
+                    st.session_state.waiting_for_placement = False
                     st.session_state.tournament_active = True
                     st.session_state.current_round = st.session_state.total_races + 1
                     st.session_state.final_check_failed = False
@@ -763,7 +859,7 @@ with tab1:
 
                 # Cancel
                 if st.button("Abbrechen"):
-                    st.session_state.waiting_for_final_placement = False
+                    st.session_state.waiting_for_placement = False
                     st.session_state.tournament_id = None
                     st.rerun()
 
@@ -801,8 +897,8 @@ with tab2:
             with col_del:
                 if not df_players.empty:
                     st.write("**Löschen:**")
-                    delete_name = st.selectbox("Löschen", df_players["name"].tolist(), label_visibility="collapsed")
-                    if st.session_state.get("confirm_delete_player") != delete_name:
+                    delete_name = st.selectbox("Löschen", df_players["name"].tolist(), label_visibility="collapsed", index=None, placeholder="")
+                    if st.session_state.get("confirm_delete_player") != delete_name or st.session_state.get("confirm_delete_player") is None:
                         if st.button("Löschen", type="secondary"):
                             st.session_state.confirm_delete_player = delete_name
                             st.rerun()
@@ -835,10 +931,10 @@ with tab2:
         st.write("**Spieler:**")
         profile_name = st.selectbox("Spieler", df_players["name"].tolist(), label_visibility="collapsed")
 
-        # Segmented control for filtering (Overall / Kario / Mario)
+        # Filter game mode
         t2_mode = st.segmented_control("Statistiken filtern", options=["Gesamt", "Kario", "Mario"], default="Gesamt", key="t2_mode", label_visibility="collapsed")
 
-        # Kario filter conditions
+        # Filter conditions
         kario_cond = ""
         kario_cond_tr2 = ""
         if t2_mode == "Kario":
@@ -895,7 +991,7 @@ with tab2:
                 st.write("**❤️ Lieblingsstrecken**")
                 st.dataframe(df_fav, hide_index=True, width="stretch")
         else:
-            st.info("Keine Renndaten für diesen Spieler.")
+            st.info("Keine Statistiken für diesen Spieler vorhanden.")
 
 # ==========================================
 # TAB 3: TRACK DATABASE
@@ -906,22 +1002,24 @@ with tab3:
     selected_track = st.selectbox("Strecke", df_tracks["name"].tolist(), label_visibility="collapsed")
     df_play_count, df_most_picked, df_placement, df_points, df_wins = get_track_stats(selected_track)
 
-    st.write(f"**Wie oft gespielt:** {df_play_count['count'].values[0]}x")
-    st.write(f"**Am öftesten gewählt von:** {str(df_most_picked['name'].values[0]) + ' (' + str(df_most_picked['c'].values[0]) + 'x)' if not df_most_picked.empty else 'Niemandem'}")
+    st.write(f"**Gespielt:** {df_play_count['count'].values[0]}x")
 
-    st.divider()
-    st.write("##### 🏆 Ranglisten")
+    if df_play_count['count'].values[0] > 0:
+        st.dataframe(df_most_picked, hide_index=True, width="stretch")
 
-    rl1, rl2, rl3 = st.columns(3)
-    with rl1:
-        st.write("**Nach Ø-Platz**")
-        st.dataframe(df_placement, hide_index=True, width="stretch")
-    with rl2:
-        st.write("**Nach Ø-Punkten**")
-        st.dataframe(df_points, hide_index=True, width="stretch")
-    with rl3:
-        st.write("**Nach Anzahl Siegen**")
-        st.dataframe(df_wins, hide_index=True, width="stretch")
+        st.write("---")
+
+        st.write("##### 🏆 Ranglisten")
+        rl1, rl2, rl3 = st.columns(3)
+        with rl1:
+            st.write("**Nach Ø-Platz**")
+            st.dataframe(df_placement, hide_index=True, width="stretch")
+        with rl2:
+            st.write("**Nach Ø-Punkten**")
+            st.dataframe(df_points, hide_index=True, width="stretch")
+        with rl3:
+            st.write("**Nach Anzahl Siegen**")
+            st.dataframe(df_wins, hide_index=True, width="stretch")
 
 # ==========================================
 # TAB 4: HEAD-TO-HEAD
@@ -937,7 +1035,7 @@ with tab4:
         st.write("**Filterung nach Strecke:**")
         h2h_track = st.selectbox("Filterung nach Strecke", ["Alle Strecken"] + df_tracks["name"].tolist(), label_visibility="collapsed")
 
-        # Segmented control for filtering (Overall / Kario / Mario)
+        # Filter game mode
         h2h_mode = st.segmented_control("Modus filtern", options=["Gesamt", "Kario", "Mario"], default="Gesamt", key="h2h_mode", label_visibility="collapsed")
 
         df_h2h_r, df_h2h_t = get_h2h_data(tuple(rivals), h2h_track, h2h_mode)
@@ -962,9 +1060,9 @@ with tab4:
                         st.write("**Ø-Punkte / Turnier**")
                         st.bar_chart(df_h2h_t.groupby("player")["tournament_points"].mean().reset_index().set_index("player"), color="#FF4B4B")
                 else:
-                    st.info("Turnier-Metriken bei Streckenfilter ausgeblendet.")
+                    st.info("Turnier-Statistiken bei Streckenfilter ausgeblendet.")
         else:
-            st.info("Keine gemeinsamen Rennen.")
+            st.info("Keine Statistiken für diese Spieler vorhanden.")
 
 # ==========================================
 # TAB 5: HISTORY & EDITING
@@ -975,51 +1073,42 @@ with tab5:
     df_history = get_history_list()
 
     if df_history.empty:
-        st.info("Keine Turniere gespeichert.")
+        st.info("Keine Turniere vorhanden.")
     else:
-        st.dataframe(df_history, width="stretch", hide_index=True)
+        st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Teilnehmer", "Datum"])
         st.divider()
 
         if not st.session_state.authenticated:
             st.warning("🔒 Melde dich an.")
         else:
             st.write("##### Bearbeiten")
-            st.write("**Turnier-ID:**")
-            selected_tournament_id = st.selectbox("Turnier-ID zum Bearbeiten", df_history['Turnier-ID'].tolist(), key="select_edit_id", label_visibility="collapsed")
+            st.write("**Turnier-Nr:**")
+
+            num_to_id = dict(zip(df_history["Turnier-Nr."], df_history["Turnier-ID"]))
+            selected_tournament_num = st.selectbox("Turnier zum Bearbeiten", df_history['Turnier-Nr.'].tolist(),key="select_edit_id",label_visibility="collapsed")
+            selected_tournament_id = num_to_id.get(selected_tournament_num)
 
             st.divider()
 
             if selected_tournament_id:
+
+                # Tournament placements
                 st.write("##### Turnier-Endplatzierungen")
-                df_current_placements = pd.read_sql_query("""
-                    SELECT player_name, final_placement 
-                    FROM tournament_results 
-                    WHERE tournament_id = %s;
-                """, conn, params=(selected_tournament_id,))
-
-                df_current_points = pd.read_sql_query("""
-                    SELECT rr.player_name, SUM(pm.points) as total_points 
-                    FROM race_results rr 
-                    JOIN races r ON rr.race_id = r.id 
-                    JOIN points_mapping pm ON rr.placement = pm.placement 
-                    WHERE r.tournament_id = %s 
-                    GROUP BY rr.player_name;
-                """, conn, params=(selected_tournament_id,))
-
+                df_current_placements, df_current_points, df_current_beer, num_races_in_tournament, df_race_list = get_tournament_edit_data(selected_tournament_id)
                 current_points_dict = dict(zip(df_current_points["player_name"], df_current_points["total_points"]))
 
                 edited_final_placements = {}
-                input_error_fp = False
+                ui_error_fp = False
 
                 for _, row in df_current_placements.iterrows():
                     val = ui_placement_selection(row['player_name'], prefix_key=f"edit_fp_{selected_tournament_id}", custom_title=f"**{row['player_name']}** ({current_points_dict.get(row['player_name'], 0)} Punkte)**:**", default_val=int(row['final_placement']))
-                    if val in ["duplicate", "missing"]:
-                        input_error_fp = True
+                    if val in ["two_positions", "missing"]:
+                        ui_error_fp = True
                     else:
                         edited_final_placements[row['player_name']] = int(val)
 
                 if st.button("Aktualisieren", type="primary", key="races_update"):
-                    if input_error_fp:
+                    if ui_error_fp:
                         st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                     else:
                         cur = conn.cursor()
@@ -1036,32 +1125,20 @@ with tab5:
                                 del st.session_state[key]
                         st.rerun()
 
-                df_current_beer = pd.read_sql_query("""
-                    SELECT player_name, beer_finished_after, kario 
-                    FROM tournament_results 
-                    WHERE tournament_id = %s;
-                """, conn, params=(selected_tournament_id,))
-
+                # Kario
                 kario = (df_current_beer['kario'] == 1).any()
                 if kario:
                     st.divider()
                     st.write("##### Bier")
 
-                    cur = conn.cursor()
-                    cur.execute("""
-                        SELECT COUNT(*) 
-                        FROM races 
-                        WHERE tournament_id = %s;
-                    """, (selected_tournament_id,))
-
-                    num_races_in_tournament = cur.fetchone()[0] or 1
                     beer_options = list(range(1, num_races_in_tournament + 1))
                     beer_options.append("❌")
 
                     edited_beer = {}
-                    input_error_b_fp = False
+                    ui_error_b_fp = False
 
                     for _, row in df_current_beer.iterrows():
+
                         st.write(f"**{row['player_name']}:**")
                         beer_default = "❌"
                         if not isnan(row["beer_finished_after"]):
@@ -1069,7 +1146,7 @@ with tab5:
 
                         beer_val = st.segmented_control(f"Beer_{row['player_name']}", options=beer_options, key=f"edit_beer_fp_{selected_tournament_id}_{row['player_name']}", label_visibility="collapsed", default=beer_default)
                         if beer_val is None:
-                            input_error_b_fp = True
+                            ui_error_b_fp = True
                         else:
                             if beer_val == "❌":
                                 edited_beer[row['player_name']] = "❌"
@@ -1077,7 +1154,7 @@ with tab5:
                                 edited_beer[row['player_name']] = int(beer_val)
 
                     if st.button("Aktualisieren", type="primary", key="beer_update"):
-                        if input_error_b_fp:
+                        if ui_error_b_fp:
                             st.error("❌ Für alle Spieler angeben, wann das Bier geleert wurde!")
                         else:
                             cur = conn.cursor()
@@ -1109,38 +1186,19 @@ with tab5:
                             st.rerun()
 
                 st.divider()
+
+                # Rennen
                 st.write("##### Rennergebnisse")
-                df_race_list = pd.read_sql_query("""
-                    SELECT id as race_id, track_name 
-                    FROM races 
-                    WHERE tournament_id = %s;
-                """, conn, params=(selected_tournament_id,))
 
                 for idx, r_row in df_race_list.iterrows():
                     race_id = int(r_row['race_id'])
                     with st.expander(f"**Rennen {idx + 1}** (ID #{race_id})**:** {r_row['track_name']}"):
-                        cur = conn.cursor()
-                        cur.execute("""
-                            SELECT track_name, picked_by_name 
-                            FROM races 
-                            WHERE id = %s;
-                        """, (race_id,))
-                        curr_race = cur.fetchone()
-
+                        curr_track_name, picker_name_db, df_race_placements = get_race_edit_data(race_id)
                         all_track_names = df_tracks["name"].tolist()
-                        curr_track_name = curr_race[0]
-                        picker_name_db = curr_race[1]
 
                         st.write("**Strecke:**")
                         track_index = all_track_names.index(curr_track_name) if curr_track_name in all_track_names else 0
                         edit_track_name = st.selectbox("Strecke", all_track_names, index=track_index, key=f"edit_track_{race_id}", label_visibility="collapsed")
-
-                        df_race_placements = pd.read_sql_query("""
-                            SELECT player_name, placement 
-                            FROM race_results 
-                            WHERE race_id = %s;
-                        """, conn, params=(race_id,))
-
                         race_players = df_race_placements['player_name'].tolist()
 
                         edit_picked_by_name = None
@@ -1153,23 +1211,23 @@ with tab5:
                         st.write("**Platzierungen:**")
 
                         edited_race_placements = {}
-                        is_race_error = False
+                        ui_race_error = False
                         has_duplicate_race = False
 
                         for _, p_row in df_race_placements.iterrows():
                             val = ui_placement_selection(p_row['player_name'], prefix_key=f"edit_r_{race_id}", default_val=int(p_row['placement']))
 
-                            if val in ["duplicate", "missing"]:
-                                is_race_error = True
+                            if val in ["two_positions", "missing"]:
+                                ui_race_error = True
                             else:
                                 edited_race_placements[p_row['player_name']] = int(val)
 
-                        if not is_race_error and has_duplicates(list(edited_race_placements.values())):
-                            is_race_error = True
+                        if not ui_race_error and has_duplicates(list(edited_race_placements.values())):
+                            ui_race_error = True
                             duplicate_race = True
 
                         if st.button("Aktualisieren", key=f"btn_update_race_{race_id}", type="primary"):
-                            if is_race_error and not duplicate_race:
+                            if ui_race_error and not duplicate_race:
                                 st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                             elif duplicate_race:
                                 st.error("❌ Doppelte Platzierung!")
@@ -1197,6 +1255,7 @@ with tab5:
 
             st.divider()
 
+            # Delete tournament
             if st.session_state.get("confirm_delete_tournament") != selected_tournament_id:
                 if st.button("Löschen", type="secondary", key=f"btn_del_{selected_tournament_id}"):
                     st.session_state.confirm_delete_tournament = selected_tournament_id
