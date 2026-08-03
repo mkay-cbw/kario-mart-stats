@@ -26,6 +26,8 @@ cursor = conn.cursor()
 # Authentication
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+if "master" not in st.session_state:
+    st.session_state.master = False
 
 # Tournament parameters
 if "tournament_id" not in st.session_state:
@@ -65,17 +67,17 @@ def has_duplicates(lst):
     """Checks for duplicates in a list."""
     return len(lst) != len(set(lst))
 
-def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None):
+def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None, disabled=False):
     """Generates two 1x6 Segmented Controls and validates the input."""
     title = custom_title if custom_title else f"**{name}:**"
     st.write(title)
-    st.write("")
+    # st.write("")
 
     val1 = default_val if default_val in [1, 2, 3, 4, 5, 6] else None
     val2 = default_val if default_val in [7, 8, 9, 10, 11, 12] else None
 
-    place1 = st.segmented_control("Platz 1-6", options=[1, 2, 3, 4, 5, 6], default=val1, key=f"seg1_{prefix_key}_{name}", label_visibility="collapsed")
-    place2 = st.segmented_control("Platz 7-12", options=[7, 8, 9, 10, 11, 12], default=val2, key=f"seg2_{prefix_key}_{name}", label_visibility="collapsed")
+    place1 = st.segmented_control("Platz 1-6", options=[1, 2, 3, 4, 5, 6], default=val1, key=f"seg1_{prefix_key}_{name}", label_visibility="collapsed", disabled=disabled)
+    place2 = st.segmented_control("Platz 7-12", options=[7, 8, 9, 10, 11, 12], default=val2, key=f"seg2_{prefix_key}_{name}", label_visibility="collapsed", disabled=disabled)
 
     if (place1 is not None) and (place2 is not None):
         return "two_positions"
@@ -83,6 +85,23 @@ def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None
         return "missing"
 
     return place1 if place1 is not None else place2
+
+def write_with_border(text, border=st.secrets["custom_theme"]["border"], color=st.secrets["custom_theme"]["color"], padding_v=st.secrets["custom_theme"]["padding_v"], padding_h=st.secrets["custom_theme"]["padding_h"], border_radius=st.secrets["custom_theme"]["border_radius"], font_size=st.secrets["custom_theme"]["font_size"], font_weight=st.secrets["custom_theme"]["font_weight"]):
+    st.markdown(
+        f"""
+            <div style="
+                display: inline-block;
+                border: {border}px solid {color}; 
+                padding: {padding_v}px {padding_h}px; 
+                border-radius: {border_radius}px; 
+                font-size: {font_size}px; 
+                font-weight: {font_weight};
+            ">
+                {text}
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ==========================================
 # 4. CACHED FUNCTIONS
@@ -424,21 +443,57 @@ def get_history_list():
 # ==========================================
 # 3. PAGE CONFIG & DATABASE INITIALIZATION
 # ==========================================
-
-# Page title and tabs
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏁 **Turnier-Erfassung**", "👤 **Spieler**", "🗺️ **Strecken**", "⚔️ **Head-to-Head**", "📋 **Verlauf**"])
+
+# Custom CSS for tabs
+st.markdown(
+    f"""
+        <style>
+        /* Font size */
+        .st-key-tabs div[data-baseweb="button-group"] button div {{
+            font-size: {st.secrets["custom_theme"]["font_size"]}px !important;
+        }}
+        
+        /* Reset buttons */
+        .st-key-tabs div[data-baseweb="button-group"] button {{
+            border: none !important;
+            margin: 0 !important;
+            box-sizing: border-box !important;
+        }}
+        
+        /* Lines between buttons */
+        .st-key-tabs div[data-baseweb="button-group"] button + button {{
+            border-left: {st.secrets["custom_theme"]["border"]}px solid {st.secrets["custom_theme"]["color"]} !important;
+        }}
+        
+         /* Border */
+        .st-key-tabs div[data-baseweb="button-group"] {{
+            border: {st.secrets["custom_theme"]["border"]}px solid {st.secrets["custom_theme"]["color"]} !important;
+            border-radius: {st.secrets["custom_theme"]["border_radius"]}px; 
+            overflow: hidden !important;
+        }}
+        </style>
+    """,
+    unsafe_allow_html=True,
+)
+tab = st.segmented_control("Tabs", options=["🏁 **Turnier**", "👤 **Spieler**", "🗺️ **Strecken**", "⚔️ **H2H**", "📋 **Verlauf**"], default="🏁 **Turnier**", width="stretch", label_visibility="collapsed", key="tabs")
 
 # Sidebar
 with st.sidebar:
-    st.subheader("🔒 Admin-Bereich")
+    st.subheader("🔒 Anmeldung")
     if not st.session_state.authenticated:
 
         # Login
         st.write("**Passwort:**")
-        admin_password = st.text_input("Passwort", type="password", label_visibility="collapsed")
-        if st.button("Anmelden", type="secondary", width="stretch"):
-            if admin_password == st.secrets["passworte"]["admin_passwort"]:
+        password = st.text_input("Passwort", type="password", label_visibility="collapsed")
+        if st.button("**Anmelden**", type="secondary", width="stretch"):
+            if password == st.secrets["passwords"]["master_pw"]:
+                st.session_state.authenticated = True
+                st.session_state.master = True
+                st.success("Anmeldung erfolgreich!")
+                time.sleep(2)
+                st.rerun()
+            elif password == st.secrets["passwords"]["user_pw"]:
                 st.session_state.authenticated = True
                 st.success("Anmeldung erfolgreich!")
                 time.sleep(2)
@@ -448,9 +503,13 @@ with st.sidebar:
     else:
 
         # Login successful
-        st.success("🔒 Angemeldet als Admin")
-        if st.button("Abmelden", type="secondary", width="stretch"):
+        if st.session_state.master:
+            st.success("🔒 Angemeldet als Admin")
+        else:
+            st.success("🔒 Angemeldet")
+        if st.button("**Abmelden**", type="secondary", width="stretch"):
             st.session_state.authenticated = False
+            st.session_state.master = False
             st.rerun()
 
 # Database initialization
@@ -573,14 +632,15 @@ df_tracks = get_df_tracks()
 # ==========================================
 # TAB 1: TOURNAMENT TRACKING
 # ==========================================
-with tab1:
+if tab == "🏁 **Turnier**":
     if not st.session_state.authenticated:
-        st.warning("🔒 Melde dich in der Sidebar an, um Turniere zu erfassen oder den Verlauf zu editieren.")
+        st.warning("🔒 Melde dich in der Sidebar an, um Turniere zu erfassen.")
     else:
 
         # Tournament setup
         if not st.session_state.tournament_active and not st.session_state.waiting_for_placement:
-            st.write("##### Setup")
+            write_with_border("Setup")
+            st.write("")
 
             st.write("**Spieler:**")
             selected_names = st.multiselect("Spieler", df_players["name"].tolist(), key="players_tab1", default=["Pfeiffer", "Markus"] if len(df_players) >= 2 else [], label_visibility="collapsed")
@@ -594,10 +654,10 @@ with tab1:
             st.write("**Spielmodus:**")
             game_mode = st.segmented_control("Spielmodus", options=["Kario", "Mario"], default="Kario", label_visibility="collapsed")
 
-            st.divider()
+            st.write("")
 
             # Start
-            if st.button("Starten", type="primary"):
+            if st.button("**Starten**", type="primary"):
                 if len(selected_names) < 2:
                     st.error("❌ Ein Turnier erfordert mindestens 2 Spieler!")
                 else:
@@ -612,7 +672,8 @@ with tab1:
         # Races
         elif st.session_state.tournament_active and not st.session_state.waiting_for_placement:
 
-            st.write("##### Rennplatzierungen")
+            write_with_border("Rennergebnisse")
+            st.write("")
             active_players = st.session_state.active_players
             all_races_valid = True
             first_invalid_race = None
@@ -660,10 +721,7 @@ with tab1:
                         elif track_name is not None:
                             st.info("Keine Statistiken für diese Strecke vorhanden.")
 
-                    st.write("---")
-
                     # Placements
-                    st.write("**Platzierungen:**")
                     placements = {}
                     error = False
                     ui_error = False
@@ -684,11 +742,12 @@ with tab1:
                         if first_invalid_race is None:
                             first_invalid_race = race_num
 
+                    st.write("")
+
                     # Next
                     if should_be_open:
                         if race_num < st.session_state.total_races:
-                            st.write("---")
-                            if st.button(f"Weiter", key=f"btn_next_{race_num}"):
+                            if st.button(f"**Weiter**", key=f"btn_next_{race_num}"):
                                 if ui_error:
                                     st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                                 elif duplicate:
@@ -697,13 +756,13 @@ with tab1:
                                     st.session_state.current_round = race_num + 1
                                     st.rerun()
 
-            st.divider()
+            st.write("")
 
             col_save, col_cancel = st.columns([3, 1])
             with col_save:
 
                 # Save
-                if st.button("Speichern", type="primary"):
+                if st.button("**Speichern**", type="primary"):
                     if not all_races_valid:
                         st.error(f"❌ Fehler bei den Platzierungen! Überprüfe Rennen {first_invalid_race}.")
                         st.session_state.current_round = first_invalid_race
@@ -732,7 +791,7 @@ with tab1:
             with col_cancel:
 
                 # Cancel
-                if st.button("❌ Abbrechen"):
+                if st.button("❌ **Abbrechen**"):
                     st.session_state.backup_races = {}
                     st.session_state.final_check_failed = False
                     st.session_state.tournament_active = False
@@ -741,7 +800,8 @@ with tab1:
 
         # Finalize tournament
         elif st.session_state.waiting_for_placement:
-            st.write("##### Turnier-Endplatzierungen")
+            write_with_border("Turnierplatzierungen")
+            st.write("")
             active_players = st.session_state.active_players
             final_placements = {}
             beer_finished = {}
@@ -768,7 +828,8 @@ with tab1:
             # Kario
             if st.session_state.game_mode == "Kario":
                 st.write("---")
-                st.write("##### Bier")
+                write_with_border("Bier")
+                st.write("")
                 for name in active_players:
                     st.write(f"**{name}:**")
                     beer_options = list(range(1, st.session_state.total_races + 1))
@@ -788,7 +849,7 @@ with tab1:
             with col_finalize:
 
                 # Finalize
-                if st.button("Abschließen", type="primary"):
+                if st.button("**Abschließen**", type="primary"):
                     if ui_error:
                         st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                     elif st.session_state.game_mode == "Kario" and ui_error_beer:
@@ -850,7 +911,7 @@ with tab1:
             with col_cancel:
 
                 # Back
-                if st.button("Zurück"):
+                if st.button("**Zurück**"):
                     st.session_state.waiting_for_placement = False
                     st.session_state.tournament_active = True
                     st.session_state.current_round = st.session_state.total_races + 1
@@ -858,7 +919,7 @@ with tab1:
                     st.rerun()
 
                 # Cancel
-                if st.button("Abbrechen"):
+                if st.button("**Abbrechen**"):
                     st.session_state.waiting_for_placement = False
                     st.session_state.tournament_id = None
                     st.rerun()
@@ -866,8 +927,10 @@ with tab1:
 # ==========================================
 # TAB 2: PLAYER PROFILES
 # ==========================================
-with tab2:
-    with st.expander("👤 **Verwaltung Spieler-Datenbank**"):
+if tab == "👤 **Spieler**":
+    write_with_border("Verwaltung")
+    st.write("")
+    with st.expander("👤 **Spieler-Datenbank**"):
         if not st.session_state.authenticated:
             st.warning("🔒 Melde dich an.")
         else:
@@ -877,7 +940,7 @@ with tab2:
             with col_add:
                 st.write("**Neuer Spieler:**")
                 new_name = st.text_input("Neuer Spieler", label_visibility="collapsed")
-                if st.button("Hinzufügen", type="primary"):
+                if st.button("**Hinzufügen**", type="primary"):
                     if new_name.strip():
                         try:
                             cur = conn.cursor()
@@ -899,14 +962,14 @@ with tab2:
                     st.write("**Löschen:**")
                     delete_name = st.selectbox("Löschen", df_players["name"].tolist(), label_visibility="collapsed", index=None, placeholder="")
                     if st.session_state.get("confirm_delete_player") != delete_name or st.session_state.get("confirm_delete_player") is None:
-                        if st.button("Löschen", type="secondary"):
+                        if st.button("**Löschen**", type="secondary"):
                             st.session_state.confirm_delete_player = delete_name
                             st.rerun()
                     else:
                         st.error(f"⚠️ **{delete_name}** unwiderruflich löschen?")
                         c_conf1, c_conf2 = st.columns(2)
                         with c_conf1:
-                            if st.button("Löschen", type="primary", width="stretch"):
+                            if st.button("**Löschen**", type="primary", width="stretch"):
                                 cur = conn.cursor()
                                 cur.execute("""
                                     DELETE FROM players 
@@ -919,14 +982,15 @@ with tab2:
                                 time.sleep(2)
                                 st.rerun()
                         with c_conf2:
-                            if st.button("Abbrechen", width="stretch"):
+                            if st.button("**Abbrechen**", width="stretch"):
                                 st.session_state.confirm_delete_player = None
                                 st.rerun()
 
     st.divider()
 
     # Player stats
-    st.write("##### Spieler-Statistiken")
+    write_with_border("Statistiken")
+    st.write("")
     if not df_players.empty:
         st.write("**Spieler:**")
         profile_name = st.selectbox("Spieler", df_players["name"].tolist(), label_visibility="collapsed")
@@ -982,7 +1046,8 @@ with tab2:
             st.divider()
 
             # Ranking display
-            st.write("##### 🏆 Ranglisten")
+            write_with_border("Ranglisten")
+            st.write("")
             t_col1, t_col2 = st.columns(2)
             with t_col1:
                 st.write("**🔝 Beste Strecken**")
@@ -996,8 +1061,9 @@ with tab2:
 # ==========================================
 # TAB 3: TRACK DATABASE
 # ==========================================
-with tab3:
-    st.write("##### Strecken-Statistiken")
+if tab == "🗺️ **Strecken**":
+    write_with_border("Statistiken")
+    st.write("")
     st.write("**Strecke:**")
     selected_track = st.selectbox("Strecke", df_tracks["name"].tolist(), label_visibility="collapsed")
     df_play_count, df_most_picked, df_placement, df_points, df_wins = get_track_stats(selected_track)
@@ -1009,7 +1075,8 @@ with tab3:
 
         st.write("---")
 
-        st.write("##### 🏆 Ranglisten")
+        write_with_border("Ranglisten")
+        st.write("")
         rl1, rl2, rl3 = st.columns(3)
         with rl1:
             st.write("**Nach Ø-Platz**")
@@ -1024,8 +1091,9 @@ with tab3:
 # ==========================================
 # TAB 4: HEAD-TO-HEAD
 # ==========================================
-with tab4:
-    st.write("##### Rivalen-Vergleich")
+if tab == "⚔️ **H2H**":
+    write_with_border("Vergleich")
+    st.write("")
     st.write("**Spieler:**")
     rivals = st.multiselect("Spieler", df_players["name"].tolist(), key="players_tab4", default=["Pfeiffer", "Markus"] if len(df_players) >= 2 else [], label_visibility="collapsed")
 
@@ -1067,47 +1135,51 @@ with tab4:
 # ==========================================
 # TAB 5: HISTORY & EDITING
 # ==========================================
-with tab5:
-    st.write("##### Turnierverlauf")
+if tab == "📋 **Verlauf**":
+    write_with_border("Turnierverlauf")
+    st.write("")
 
     df_history = get_history_list()
 
     if df_history.empty:
         st.info("Keine Turniere vorhanden.")
     else:
+
         st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Teilnehmer", "Datum"])
         st.divider()
 
-        if not st.session_state.authenticated:
-            st.warning("🔒 Melde dich an.")
-        else:
-            st.write("##### Bearbeiten")
-            st.write("**Turnier-Nr:**")
+        write_with_border("Turnier-Nr.")
+        st.write("")
 
-            num_to_id = dict(zip(df_history["Turnier-Nr."], df_history["Turnier-ID"]))
-            selected_tournament_num = st.selectbox("Turnier zum Bearbeiten", df_history['Turnier-Nr.'].tolist(),key="select_edit_id",label_visibility="collapsed")
-            selected_tournament_id = num_to_id.get(selected_tournament_num)
+        num_to_id = dict(zip(df_history["Turnier-Nr."], df_history["Turnier-ID"]))
+        selected_tournament_num = st.selectbox("Turnier zum Bearbeiten", df_history['Turnier-Nr.'].tolist(),key="select_edit_id",label_visibility="collapsed")
+        selected_tournament_id = num_to_id.get(selected_tournament_num)
 
-            st.divider()
+        st.divider()
 
-            if selected_tournament_id:
+        if selected_tournament_id:
+            disable_edit = False if st.session_state.master else True
 
-                # Tournament placements
-                st.write("##### Turnier-Endplatzierungen")
-                df_current_placements, df_current_points, df_current_beer, num_races_in_tournament, df_race_list = get_tournament_edit_data(selected_tournament_id)
-                current_points_dict = dict(zip(df_current_points["player_name"], df_current_points["total_points"]))
+            # Tournament placements
+            write_with_border("Endergebnisse")
+            st.write("")
+            df_current_placements, df_current_points, df_current_beer, num_races_in_tournament, df_race_list = get_tournament_edit_data(selected_tournament_id)
+            current_points_dict = dict(zip(df_current_points["player_name"], df_current_points["total_points"]))
 
-                edited_final_placements = {}
-                ui_error_fp = False
+            edited_final_placements = {}
+            ui_error_fp = False
 
-                for _, row in df_current_placements.iterrows():
-                    val = ui_placement_selection(row['player_name'], prefix_key=f"edit_fp_{selected_tournament_id}", custom_title=f"**{row['player_name']}** ({current_points_dict.get(row['player_name'], 0)} Punkte)**:**", default_val=int(row['final_placement']))
-                    if val in ["two_positions", "missing"]:
-                        ui_error_fp = True
-                    else:
-                        edited_final_placements[row['player_name']] = int(val)
+            for _, row in df_current_placements.iterrows():
+                val = ui_placement_selection(row['player_name'], prefix_key=f"edit_fp_{selected_tournament_id}", custom_title=f"**{row['player_name']}** ({current_points_dict.get(row['player_name'], 0)} Punkte)**:**", default_val=int(row['final_placement']))
+                if val in ["two_positions", "missing"]:
+                    ui_error_fp = True
+                else:
+                    edited_final_placements[row['player_name']] = int(val)
 
-                if st.button("Aktualisieren", type="primary", key="races_update"):
+            st.write("")
+
+            if not disable_edit:
+                if st.button("**Aktualisieren**", type="primary", key="races_update"):
                     if ui_error_fp:
                         st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                     else:
@@ -1125,35 +1197,39 @@ with tab5:
                                 del st.session_state[key]
                         st.rerun()
 
-                # Kario
-                kario = (df_current_beer['kario'] == 1).any()
-                if kario:
-                    st.divider()
-                    st.write("##### Bier")
+            # Kario
+            kario = (df_current_beer['kario'] == 1).any()
+            if kario:
+                st.divider()
+                write_with_border("Bier")
+                st.write("")
 
-                    beer_options = list(range(1, num_races_in_tournament + 1))
-                    beer_options.append("❌")
+                beer_options = list(range(1, num_races_in_tournament + 1))
+                beer_options.append("❌")
 
-                    edited_beer = {}
-                    ui_error_b_fp = False
+                edited_beer = {}
+                ui_error_b_fp = False
 
-                    for _, row in df_current_beer.iterrows():
+                for _, row in df_current_beer.iterrows():
 
-                        st.write(f"**{row['player_name']}:**")
-                        beer_default = "❌"
-                        if not isnan(row["beer_finished_after"]):
-                            beer_default = row["beer_finished_after"]
+                    st.write(f"**{row['player_name']}:**")
+                    beer_default = "❌"
+                    if not isnan(row["beer_finished_after"]):
+                        beer_default = row["beer_finished_after"]
 
-                        beer_val = st.segmented_control(f"Beer_{row['player_name']}", options=beer_options, key=f"edit_beer_fp_{selected_tournament_id}_{row['player_name']}", label_visibility="collapsed", default=beer_default)
-                        if beer_val is None:
-                            ui_error_b_fp = True
+                    beer_val = st.segmented_control(f"Beer_{row['player_name']}", options=beer_options, key=f"edit_beer_fp_{selected_tournament_id}_{row['player_name']}", label_visibility="collapsed", default=beer_default)
+                    if beer_val is None:
+                        ui_error_b_fp = True
+                    else:
+                        if beer_val == "❌":
+                            edited_beer[row['player_name']] = "❌"
                         else:
-                            if beer_val == "❌":
-                                edited_beer[row['player_name']] = "❌"
-                            else:
-                                edited_beer[row['player_name']] = int(beer_val)
+                            edited_beer[row['player_name']] = int(beer_val)
 
-                    if st.button("Aktualisieren", type="primary", key="beer_update"):
+                st.write("")
+
+                if not disable_edit:
+                    if st.button("**Aktualisieren**", type="primary", key="beer_update"):
                         if ui_error_b_fp:
                             st.error("❌ Für alle Spieler angeben, wann das Bier geleert wurde!")
                         else:
@@ -1185,48 +1261,49 @@ with tab5:
                             time.sleep(2)
                             st.rerun()
 
-                st.divider()
+            st.divider()
 
-                # Rennen
-                st.write("##### Rennergebnisse")
+            # Races
+            write_with_border("Rennergebnisse")
+            st.write("")
 
-                for idx, r_row in df_race_list.iterrows():
-                    race_id = int(r_row['race_id'])
-                    with st.expander(f"**Rennen {idx + 1}** (ID #{race_id})**:** {r_row['track_name']}"):
-                        curr_track_name, picker_name_db, df_race_placements = get_race_edit_data(race_id)
-                        all_track_names = df_tracks["name"].tolist()
+            for idx, r_row in df_race_list.iterrows():
+                race_id = int(r_row['race_id'])
+                with st.expander(f"**Rennen {idx + 1}** (ID #{race_id})**:** {r_row['track_name']}"):
+                    curr_track_name, picker_name_db, df_race_placements = get_race_edit_data(race_id)
+                    all_track_names = df_tracks["name"].tolist()
 
-                        st.write("**Strecke:**")
-                        track_index = all_track_names.index(curr_track_name) if curr_track_name in all_track_names else 0
-                        edit_track_name = st.selectbox("Strecke", all_track_names, index=track_index, key=f"edit_track_{race_id}", label_visibility="collapsed")
-                        race_players = df_race_placements['player_name'].tolist()
+                    st.write("**Strecke:**")
+                    track_index = all_track_names.index(curr_track_name) if curr_track_name in all_track_names else 0
+                    edit_track_name = st.selectbox("Strecke", all_track_names, index=track_index, key=f"edit_track_{race_id}", label_visibility="collapsed")
+                    race_players = df_race_placements['player_name'].tolist()
 
-                        edit_picked_by_name = None
-                        if picker_name_db is not None or st.session_state.get("selection_mode") == "Auswahl":
-                            st.write("**Gewählt von:**")
-                            picker_index = race_players.index(picker_name_db) if picker_name_db in race_players else 0
-                            edit_picked_by_name = st.selectbox("Gewählt von", race_players, index=picker_index, key=f"edit_picker_{race_id}", label_visibility="collapsed")
+                    edit_picked_by_name = None
+                    if picker_name_db is not None or st.session_state.get("selection_mode") == "Auswahl":
+                        st.write("**Gewählt von:**")
+                        picker_index = race_players.index(picker_name_db) if picker_name_db in race_players else 0
+                        edit_picked_by_name = st.selectbox("Gewählt von", race_players, index=picker_index, key=f"edit_picker_{race_id}", label_visibility="collapsed")
 
-                        st.write("---")
-                        st.write("**Platzierungen:**")
+                    edited_race_placements = {}
+                    ui_race_error = False
+                    has_duplicate_race = False
 
-                        edited_race_placements = {}
-                        ui_race_error = False
-                        has_duplicate_race = False
+                    for _, p_row in df_race_placements.iterrows():
+                        val = ui_placement_selection(p_row['player_name'], prefix_key=f"edit_r_{race_id}", default_val=int(p_row['placement']))
 
-                        for _, p_row in df_race_placements.iterrows():
-                            val = ui_placement_selection(p_row['player_name'], prefix_key=f"edit_r_{race_id}", default_val=int(p_row['placement']))
-
-                            if val in ["two_positions", "missing"]:
-                                ui_race_error = True
-                            else:
-                                edited_race_placements[p_row['player_name']] = int(val)
-
-                        if not ui_race_error and has_duplicates(list(edited_race_placements.values())):
+                        if val in ["two_positions", "missing"]:
                             ui_race_error = True
-                            duplicate_race = True
+                        else:
+                            edited_race_placements[p_row['player_name']] = int(val)
 
-                        if st.button("Aktualisieren", key=f"btn_update_race_{race_id}", type="primary"):
+                    if not ui_race_error and has_duplicates(list(edited_race_placements.values())):
+                        ui_race_error = True
+                        duplicate_race = True
+
+                    st.write("")
+
+                    if not disable_edit:
+                        if st.button("**Aktualisieren**", key=f"btn_update_race_{race_id}", type="primary"):
                             if ui_race_error and not duplicate_race:
                                 st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                             elif duplicate_race:
@@ -1253,33 +1330,35 @@ with tab5:
                                 time.sleep(2)
                                 st.rerun()
 
-            st.divider()
+            if not disable_edit:
 
-            # Delete tournament
-            if st.session_state.get("confirm_delete_tournament") != selected_tournament_id:
-                if st.button("Löschen", type="secondary", key=f"btn_del_{selected_tournament_id}"):
-                    st.session_state.confirm_delete_tournament = selected_tournament_id
-                    st.rerun()
-            else:
-                st.error(f"⚠️ **Turnier {selected_tournament_id}** unwiderruflich löschen?")
-                c_conf1, c_conf2 = st.columns(2)
+                st.write("---")
 
-                with c_conf1:
-                    if st.button("Löschen", type="primary", key=f"btn_del_confirm_{selected_tournament_id}", width="stretch"):
-                        cur = conn.cursor()
-                        cur.execute("""
-                            DELETE FROM tournaments 
-                            WHERE id = %s;
-                        """, (selected_tournament_id,))
-                        conn.commit()
-                        st.cache_data.clear()
-
-                        st.session_state.confirm_delete_tournament = None
-                        st.error(f"Turnier #{selected_tournament_id} gelöscht!")
-                        time.sleep(2)
+                # Delete tournament
+                if st.session_state.get("confirm_delete_tournament") != selected_tournament_id:
+                    if st.button("**Löschen**", type="secondary", key=f"btn_del_{selected_tournament_id}"):
+                        st.session_state.confirm_delete_tournament = selected_tournament_id
                         st.rerun()
+                else:
+                    st.error(f"⚠️ **Turnier Nr. {selected_tournament_num}** unwiderruflich löschen?")
+                    c_conf1, c_conf2 = st.columns(2)
 
-                with c_conf2:
-                    if st.button("Abbrechen", width="stretch"):
-                        st.session_state.confirm_delete_tournament = None
-                        st.rerun()
+                    with c_conf1:
+                        if st.button("**Löschen**", type="primary", key=f"btn_del_confirm_{selected_tournament_id}", width="stretch"):
+                            cur = conn.cursor()
+                            cur.execute("""
+                                DELETE FROM tournaments 
+                                WHERE id = %s;
+                            """, (selected_tournament_id,))
+                            conn.commit()
+                            st.cache_data.clear()
+
+                            st.session_state.confirm_delete_tournament = None
+                            st.error(f"Turnier #{selected_tournament_id} gelöscht!")
+                            time.sleep(2)
+                            st.rerun()
+
+                    with c_conf2:
+                        if st.button("**Abbrechen**", width="stretch"):
+                            st.session_state.confirm_delete_tournament = None
+                            st.rerun()
