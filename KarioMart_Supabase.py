@@ -449,28 +449,25 @@ st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layou
 st.markdown(
     f"""
         <style>
-        /* Font size */
-        .st-key-tabs div[data-baseweb="button-group"] button div {{
-            font-size: {st.secrets["custom_theme"]["font_size"]}px !important;
+        /* Ziel auf Segmented Control Container über data-testid */
+        div[data-testid="stSegmentedControl"] div[data-baseweb="button-group"] {{
+            border: {st.secrets["custom_theme"]["border"]}px solid {st.secrets["custom_theme"]["color"]} !important;
+            border-radius: {st.secrets["custom_theme"]["border_radius"]}px !important;
+            overflow: hidden !important;
         }}
-        
-        /* Reset buttons */
-        .st-key-tabs div[data-baseweb="button-group"] button {{
+
+        div[data-testid="stSegmentedControl"] button {{
             border: none !important;
             margin: 0 !important;
             box-sizing: border-box !important;
         }}
-        
-        /* Lines between buttons */
-        .st-key-tabs div[data-baseweb="button-group"] button + button {{
+
+        div[data-testid="stSegmentedControl"] button + button {{
             border-left: {st.secrets["custom_theme"]["border"]}px solid {st.secrets["custom_theme"]["color"]} !important;
         }}
-        
-         /* Border */
-        .st-key-tabs div[data-baseweb="button-group"] {{
-            border: {st.secrets["custom_theme"]["border"]}px solid {st.secrets["custom_theme"]["color"]} !important;
-            border-radius: {st.secrets["custom_theme"]["border_radius"]}px; 
-            overflow: hidden !important;
+
+        div[data-testid="stSegmentedControl"] button div {{
+            font-size: {st.secrets["custom_theme"]["font_size"]}px !important;
         }}
         </style>
     """,
