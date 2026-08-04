@@ -86,22 +86,37 @@ def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None
 
     return place1 if place1 is not None else place2
 
-def write_with_border(text, border=st.secrets["custom_theme"]["border"], color=st.secrets["custom_theme"]["color"], padding_v=st.secrets["custom_theme"]["padding_v"], padding_h=st.secrets["custom_theme"]["padding_h"], border_radius=st.secrets["custom_theme"]["border_radius"], font_size=st.secrets["custom_theme"]["font_size"], font_weight=st.secrets["custom_theme"]["font_weight"]):
+def header(text, border=st.secrets["custom_theme"]["border"], color=st.secrets["custom_theme"]["color"], padding_v=st.secrets["custom_theme"]["padding_v"], padding_h=st.secrets["custom_theme"]["padding_h"], border_radius=st.secrets["custom_theme"]["border_radius"], font_size=st.secrets["custom_theme"]["font_size"], font_weight=st.secrets["custom_theme"]["font_weight"]):
+    # st.markdown(
+    #     f"""
+    #         <div style="
+    #             display: inline-block;
+    #             border: {border}px solid {color};
+    #             padding: {padding_v}px {padding_h}px;
+    #             border-radius: {border_radius}px;
+    #             font-size: {font_size}px;
+    #             font-weight: {font_weight};
+    #         ">
+    #             {text}
+    #         </div>
+    #     """,
+    #     unsafe_allow_html=True,
+    # )
+
     st.markdown(
         f"""
-            <div style="
-                display: inline-block;
-                border: {border}px solid {color}; 
-                padding: {padding_v}px {padding_h}px; 
-                border-radius: {border_radius}px; 
+            <p style="
                 font-size: {font_size}px; 
-                font-weight: {font_weight};
-            ">
+                font-weight: {font_weight}; 
+                line-height: 1.5; 
+                color: #FAFAFA; 
+                border-left: {border * 2}px solid {color}; 
+                padding-left: {padding_h}px; margin: 10px 0;">
                 {text}
-            </div>
+            </p>
         """,
-        unsafe_allow_html=True,
-    )
+        unsafe_allow_html=True
+)
 
 # ==========================================
 # 4. CACHED FUNCTIONS
@@ -476,7 +491,8 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-tab = st.segmented_control("Tabs", options=["🏁 **Turnier**", "👤 **Spieler**", "🗺️ **Strecken**", "⚔️ **H2H**", "📋 **Verlauf**"], default="🏁 **Turnier**", width="stretch", label_visibility="collapsed", key="tabs")
+tab1, tab2, tab3, tab4, tab5 = "🎮", "👤", "🏁", "⚔️", "📋"
+tab = st.segmented_control("Tabs", options=[tab1, tab2, tab3, tab4, tab5], default=tab1, width="stretch", label_visibility="collapsed", key="tabs")
 
 # Sidebar
 with st.sidebar:
@@ -632,14 +648,14 @@ df_tracks = get_df_tracks()
 # ==========================================
 # TAB 1: TOURNAMENT TRACKING
 # ==========================================
-if tab == "🏁 **Turnier**":
+if tab == tab1:
     if not st.session_state.authenticated:
         st.warning("🔒 Melde dich in der Sidebar an, um Turniere zu erfassen.")
     else:
 
         # Tournament setup
         if not st.session_state.tournament_active and not st.session_state.waiting_for_placement:
-            write_with_border("Setup")
+            header("Setup")
             st.write("")
 
             st.write("**Spieler:**")
@@ -672,7 +688,7 @@ if tab == "🏁 **Turnier**":
         # Races
         elif st.session_state.tournament_active and not st.session_state.waiting_for_placement:
 
-            write_with_border("Rennergebnisse")
+            header("Rennergebnisse")
             st.write("")
             active_players = st.session_state.active_players
             all_races_valid = True
@@ -800,7 +816,7 @@ if tab == "🏁 **Turnier**":
 
         # Finalize tournament
         elif st.session_state.waiting_for_placement:
-            write_with_border("Turnierplatzierungen")
+            header("Turnierplatzierungen")
             st.write("")
             active_players = st.session_state.active_players
             final_placements = {}
@@ -828,7 +844,7 @@ if tab == "🏁 **Turnier**":
             # Kario
             if st.session_state.game_mode == "Kario":
                 st.write("---")
-                write_with_border("Bier")
+                header("Bier")
                 st.write("")
                 for name in active_players:
                     st.write(f"**{name}:**")
@@ -927,10 +943,10 @@ if tab == "🏁 **Turnier**":
 # ==========================================
 # TAB 2: PLAYER PROFILES
 # ==========================================
-if tab == "👤 **Spieler**":
-    write_with_border("Verwaltung")
+if tab == tab2:
+    header("Verwaltung")
     st.write("")
-    with st.expander("👤 **Spieler-Datenbank**"):
+    with st.expander("**Spieler-Datenbank**"):
         if not st.session_state.authenticated:
             st.warning("🔒 Melde dich an.")
         else:
@@ -989,7 +1005,7 @@ if tab == "👤 **Spieler**":
     st.divider()
 
     # Player stats
-    write_with_border("Statistiken")
+    header("Spieler-Statistiken")
     st.write("")
     if not df_players.empty:
         st.write("**Spieler:**")
@@ -1046,7 +1062,7 @@ if tab == "👤 **Spieler**":
             st.divider()
 
             # Ranking display
-            write_with_border("Ranglisten")
+            header("Ranglisten")
             st.write("")
             t_col1, t_col2 = st.columns(2)
             with t_col1:
@@ -1061,8 +1077,8 @@ if tab == "👤 **Spieler**":
 # ==========================================
 # TAB 3: TRACK DATABASE
 # ==========================================
-if tab == "🗺️ **Strecken**":
-    write_with_border("Statistiken")
+if tab == tab3:
+    header("Strecken-Statistiken")
     st.write("")
     st.write("**Strecke:**")
     selected_track = st.selectbox("Strecke", df_tracks["name"].tolist(), label_visibility="collapsed")
@@ -1075,7 +1091,7 @@ if tab == "🗺️ **Strecken**":
 
         st.write("---")
 
-        write_with_border("Ranglisten")
+        header("Ranglisten")
         st.write("")
         rl1, rl2, rl3 = st.columns(3)
         with rl1:
@@ -1091,8 +1107,8 @@ if tab == "🗺️ **Strecken**":
 # ==========================================
 # TAB 4: HEAD-TO-HEAD
 # ==========================================
-if tab == "⚔️ **H2H**":
-    write_with_border("Vergleich")
+if tab == tab4:
+    header("Vergleich")
     st.write("")
     st.write("**Spieler:**")
     rivals = st.multiselect("Spieler", df_players["name"].tolist(), key="players_tab4", default=["Pfeiffer", "Markus"] if len(df_players) >= 2 else [], label_visibility="collapsed")
@@ -1135,8 +1151,8 @@ if tab == "⚔️ **H2H**":
 # ==========================================
 # TAB 5: HISTORY & EDITING
 # ==========================================
-if tab == "📋 **Verlauf**":
-    write_with_border("Turnierverlauf")
+if tab == tab5:
+    header("Turnierverlauf")
     st.write("")
 
     df_history = get_history_list()
@@ -1148,7 +1164,7 @@ if tab == "📋 **Verlauf**":
         st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Teilnehmer", "Datum"])
         st.divider()
 
-        write_with_border("Turnier-Nr.")
+        header("Turnier-Nr.")
         st.write("")
 
         num_to_id = dict(zip(df_history["Turnier-Nr."], df_history["Turnier-ID"]))
@@ -1161,7 +1177,7 @@ if tab == "📋 **Verlauf**":
             disable_edit = False if st.session_state.master else True
 
             # Tournament placements
-            write_with_border("Endergebnisse")
+            header("Endergebnisse")
             st.write("")
             df_current_placements, df_current_points, df_current_beer, num_races_in_tournament, df_race_list = get_tournament_edit_data(selected_tournament_id)
             current_points_dict = dict(zip(df_current_points["player_name"], df_current_points["total_points"]))
@@ -1201,7 +1217,7 @@ if tab == "📋 **Verlauf**":
             kario = (df_current_beer['kario'] == 1).any()
             if kario:
                 st.divider()
-                write_with_border("Bier")
+                header("Bier")
                 st.write("")
 
                 beer_options = list(range(1, num_races_in_tournament + 1))
@@ -1264,7 +1280,7 @@ if tab == "📋 **Verlauf**":
             st.divider()
 
             # Races
-            write_with_border("Rennergebnisse")
+            header("Rennergebnisse")
             st.write("")
 
             for idx, r_row in df_race_list.iterrows():
