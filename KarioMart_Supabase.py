@@ -445,31 +445,6 @@ def get_history_list():
 # ==========================================
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
 
-# Custom CSS for sidebar
-st.markdown(
-    """
-        <style>
-        /* Force the sidebar to float on top */
-        [data-testid="stSidebar"] {
-            z-index: 9999 !important;
-            height: 100vh !important;
-            box-shadow: 5px 0px 15px rgba(0,0,0,0.15);
-            top: 0 !important;
-        }
-        
-        /* Stop main content container from squeezing or shifting */
-        [data-testid="stAppViewBlockContainer"] {
-            position: absolute !important;
-            margin-left: 0px !important;
-            width: 100% !important;
-            max-width: 100% !important;
-            padding-left: 5rem !important; /* Leave a small gap for the sidebar toggle button */
-        }
-        </style>
-    """,
-    unsafe_allow_html=True
-)
-
 # Custom CSS for tabs
 st.markdown(
     f"""
