@@ -459,6 +459,7 @@ st.markdown(
         
         /* Stop main content container from squeezing or shifting */
         [data-testid="stAppViewBlockContainer"] {
+            position: absolute !important;
             margin-left: 0px !important;
             width: 100% !important;
             max-width: 100% !important;
