@@ -464,6 +464,19 @@ st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layou
 st.markdown(
     f"""
         <style>
+        /* Hide Streamlit header */
+        [data-testid="stHeader"] {{
+            display: none !important;
+        }}
+        
+        /* Remove top padding */
+        [data-testid="stMainBlockContainer"],
+        .main .block-container {{
+            padding-top: 0 !important;
+            margin-top: 0 !important;
+        }}
+
+
         /* Font size */
         .st-key-tabs div[data-baseweb="button-group"] button div {{
             font-size: {st.secrets["custom_theme"]["font_size"]}px !important;
