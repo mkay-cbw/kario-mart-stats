@@ -567,7 +567,7 @@ with st.sidebar:
             st.rerun()
 
 # Database initialization
-cursor.execute("""
+# cursor.execute("""
 #     CREATE TABLE IF NOT EXISTS players (
 #         id SERIAL PRIMARY KEY, 
 #         name TEXT NOT NULL UNIQUE
