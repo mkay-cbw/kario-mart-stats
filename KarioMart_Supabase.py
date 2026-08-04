@@ -451,6 +451,7 @@ st.markdown(
         <style>
         /* Force the sidebar to float on top */
         [data-testid="stSidebar"] {
+            position: absolute !important;
             z-index: 9999 !important;
             height: 100vh !important;
             box-shadow: 5px 0px 15px rgba(0,0,0,0.15);
