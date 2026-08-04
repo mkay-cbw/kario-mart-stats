@@ -88,22 +88,6 @@ def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None
     return place1 if place1 is not None else place2
 
 def header(text, border=st.secrets["custom_theme"]["border"], color=st.secrets["custom_theme"]["color"], padding_v=st.secrets["custom_theme"]["padding_v"], padding_h=st.secrets["custom_theme"]["padding_h"], border_radius=st.secrets["custom_theme"]["border_radius"], font_size=st.secrets["custom_theme"]["font_size"], font_weight=st.secrets["custom_theme"]["font_weight"]):
-    # st.markdown(
-    #     f"""
-    #         <div style="
-    #             display: inline-block;
-    #             border: {border}px solid {color};
-    #             padding: {padding_v}px {padding_h}px;
-    #             border-radius: {border_radius}px;
-    #             font-size: {font_size}px;
-    #             font-weight: {font_weight};
-    #         ">
-    #             {text}
-    #         </div>
-    #     """,
-    #     unsafe_allow_html=True,
-    # )
-
     st.markdown(
         f"""
             <p style="
@@ -464,24 +448,24 @@ st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layou
 # Custom CSS for sidebar
 st.markdown(
     """
-    <style>
-    /* Force the sidebar to float on top */
-    [data-testid="stSidebar"] {
-        position: absolute !important;
-        z-index: 999999 !important;
-        height: 100vh !important;
-        /* Adds a drop shadow so it stands out over your content */
-        box-shadow: 5px 0px 15px rgba(0,0,0,0.15); 
-    }
-    
-    /* Stop main content container from squeezing or shifting */
-    [data-testid="stAppViewBlockContainer"] {
-        margin-left: 0px !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        padding-left: 5rem !important; /* Leave a small gap for the sidebar toggle button */
-    }
-    </style>
+        <style>
+        /* Force the sidebar to float on top */
+        [data-testid="stSidebar"] {
+            position: absolute !important;
+            z-index: 9999 !important;
+            height: 100vh !important;
+            /* Adds a drop shadow so it stands out over your content */
+            box-shadow: 5px 0px 15px rgba(0,0,0,0.15); 
+        }
+        
+        /* Stop main content container from squeezing or shifting */
+        [data-testid="stAppViewBlockContainer"] {
+            margin-left: 0px !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            padding-left: 5rem !important; /* Leave a small gap for the sidebar toggle button */
+        }
+        </style>
     """,
     unsafe_allow_html=True
 )
