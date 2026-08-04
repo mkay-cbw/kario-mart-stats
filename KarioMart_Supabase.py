@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
+from streamlit_float import *
 import psycopg2
 import warnings
 warnings.filterwarnings('ignore', message='.*pandas only supports SQLAlchemy.*')
@@ -17,7 +18,7 @@ def init_connection():
     return psycopg2.connect(**st.secrets["postgres"])
 conn = init_connection()
 cursor = conn.cursor()
-
+float_init()
 
 # ==========================================
 # 2. SESSION STATES
@@ -460,19 +461,39 @@ def get_history_list():
 # ==========================================
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
 
+# Custom CSS for sidebar
+st.markdown(
+    """
+    <style>
+    /* Force the sidebar to float on top */
+    [data-testid="stSidebar"] {
+        position: absolute !important;
+        z-index: 999999 !important;
+        height: 100vh !important;
+        /* Adds a drop shadow so it stands out over your content */
+        box-shadow: 5px 0px 15px rgba(0,0,0,0.15); 
+    }
+    
+    /* Stop main content container from squeezing or shifting */
+    [data-testid="stAppViewBlockContainer"] {
+        margin-left: 0px !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        padding-left: 5rem !important; /* Leave a small gap for the sidebar toggle button */
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # Custom CSS for tabs
 st.markdown(
     f"""
-        <style>
-        /* Hide Streamlit header */
-        [data-testid="stHeader"] {{
-            display: none !important;
-        }}
-        
+        <style>        
         /* Remove top padding */
         [data-testid="stMainBlockContainer"],
         .main .block-container {{
-            padding-top: 0 !important;
+            padding-top: 3.5rem !important;
             margin-top: 0 !important;
         }}
 
@@ -505,7 +526,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 tab1, tab2, tab3, tab4, tab5 = "🎮", "👤", "🏁", "⚔️", "📋"
-tab = st.segmented_control("Tabs", options=[tab1, tab2, tab3, tab4, tab5], default=tab1, width="stretch", label_visibility="collapsed", key="tabs")
+container = st.container(width="stretch")
+with container:
+    tab = st.segmented_control("Tabs", options=[tab1, tab2, tab3, tab4, tab5], default=tab1, width="stretch", label_visibility="collapsed", key="tabs")
+css_config = float_css_helper(background="var(--default-backgroundColor)", transform="translateX(-50%)", width="90%", max_width="600px", top="6%", left="50%", z_index="999")
+container.float(css_config)
 
 # Sidebar
 with st.sidebar:
