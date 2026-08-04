@@ -529,7 +529,7 @@ tab1, tab2, tab3, tab4, tab5 = "🎮", "👤", "🏁", "⚔️", "📋"
 container = st.container(width="stretch")
 with container:
     tab = st.segmented_control("Tabs", options=[tab1, tab2, tab3, tab4, tab5], default=tab1, width="stretch", label_visibility="collapsed", key="tabs")
-css_config = float_css_helper(background="var(--default-backgroundColor)", transform="translateX(-50%)", width="90%", max_width="600px", top="6%", left="50%", z_index="999")
+css_config = float_css_helper(background="var(--default-backgroundColor)", transform="translateX(-50%)", width="90%", max_width="600px", top="10%", left="50%", z_index="999")
 container.float(css_config)
 
 # Sidebar
