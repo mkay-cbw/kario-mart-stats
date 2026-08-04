@@ -452,11 +452,6 @@ st.markdown(
                 display: none;
             }
             
-            /* Toolbar (Deploy/Share/GitHub) entfernen */
-            [data-testid="stToolbar"] {
-                display: none;
-            }
-            
             /* Sidebar wirklich oben beginnen lassen */
             [data-testid="stSidebar"] {
                 top: 0 !important;
