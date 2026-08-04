@@ -445,6 +445,33 @@ def get_history_list():
 # ==========================================
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
 
+st.markdown(
+    """
+        <style>
+            header[data-testid="stHeader"] {
+                display: none;
+            }
+            
+            /* Toolbar (Deploy/Share/GitHub) entfernen */
+            [data-testid="stToolbar"] {
+                display: none;
+            }
+            
+            /* Sidebar wirklich oben beginnen lassen */
+            [data-testid="stSidebar"] {
+                top: 0 !important;
+                height: 100vh !important;
+            }
+            
+            /* Hauptbereich ebenfalls nach oben schieben */
+            [data-testid="stAppViewContainer"] {
+                margin-top: 0 !important;
+            }
+        </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # Custom CSS for sidebar
 st.markdown(
     """
