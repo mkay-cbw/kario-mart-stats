@@ -568,59 +568,59 @@ with st.sidebar:
 
 # Database initialization
 cursor.execute("""
-    CREATE TABLE IF NOT EXISTS players (
-        id SERIAL PRIMARY KEY, 
-        name TEXT NOT NULL UNIQUE
-    );
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS tracks (
-        id SERIAL PRIMARY KEY, 
-        name TEXT NOT NULL UNIQUE, 
-        cup TEXT NOT NULL
-    );
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS points_mapping (
-        placement INTEGER PRIMARY KEY CHECK (placement BETWEEN 1 AND 12), 
-        points INTEGER NOT NULL
-    );
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS tournaments (
-        id SERIAL PRIMARY KEY, 
-        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS races (
-        id SERIAL PRIMARY KEY, 
-        tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE, 
-        track_name TEXT REFERENCES tracks(name) ON DELETE RESTRICT, 
-        picked_by_name TEXT REFERENCES players(name) ON DELETE SET NULL
-    );
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS race_results (
-        id SERIAL PRIMARY KEY, 
-        race_id INTEGER REFERENCES races(id) ON DELETE CASCADE, 
-        player_name TEXT REFERENCES players(name) ON DELETE CASCADE, 
-        placement INTEGER REFERENCES points_mapping(placement), 
-        UNIQUE (race_id, player_name)
-    );
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS tournament_results (
-        id SERIAL PRIMARY KEY, 
-        tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE, 
-        player_name TEXT REFERENCES players(name) ON DELETE CASCADE, 
-        final_placement INTEGER CHECK (final_placement BETWEEN 1 AND 12), 
-        beer_finished_after INTEGER, 
-        kario INTEGER, 
-        UNIQUE (tournament_id, player_name)
-    );
-""")
-conn.commit()
+#     CREATE TABLE IF NOT EXISTS players (
+#         id SERIAL PRIMARY KEY, 
+#         name TEXT NOT NULL UNIQUE
+#     );
+# """)
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS tracks (
+#         id SERIAL PRIMARY KEY, 
+#         name TEXT NOT NULL UNIQUE, 
+#         cup TEXT NOT NULL
+#     );
+# """)
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS points_mapping (
+#         placement INTEGER PRIMARY KEY CHECK (placement BETWEEN 1 AND 12), 
+#         points INTEGER NOT NULL
+#     );
+# """)
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS tournaments (
+#         id SERIAL PRIMARY KEY, 
+#         date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+#     );
+# """)
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS races (
+#         id SERIAL PRIMARY KEY, 
+#         tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE, 
+#         track_name TEXT REFERENCES tracks(name) ON DELETE RESTRICT, 
+#         picked_by_name TEXT REFERENCES players(name) ON DELETE SET NULL
+#     );
+# """)
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS race_results (
+#         id SERIAL PRIMARY KEY, 
+#         race_id INTEGER REFERENCES races(id) ON DELETE CASCADE, 
+#         player_name TEXT REFERENCES players(name) ON DELETE CASCADE, 
+#         placement INTEGER REFERENCES points_mapping(placement), 
+#         UNIQUE (race_id, player_name)
+#     );
+# """)
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS tournament_results (
+#         id SERIAL PRIMARY KEY, 
+#         tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE, 
+#         player_name TEXT REFERENCES players(name) ON DELETE CASCADE, 
+#         final_placement INTEGER CHECK (final_placement BETWEEN 1 AND 12), 
+#         beer_finished_after INTEGER, 
+#         kario INTEGER, 
+#         UNIQUE (tournament_id, player_name)
+#     );
+# """)
+# conn.commit()
 
 # ==========================================
 # 4. SEED DATA
