@@ -454,8 +454,8 @@ st.markdown(
             position: absolute !important;
             z-index: 9999 !important;
             height: 100vh !important;
-            /* Adds a drop shadow so it stands out over your content */
-            box-shadow: 5px 0px 15px rgba(0,0,0,0.15); 
+            box-shadow: 5px 0px 15px rgba(0,0,0,0.15);
+            top: 0 !important;
         }
         
         /* Stop main content container from squeezing or shifting */
