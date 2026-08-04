@@ -447,11 +447,7 @@ st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layou
 
 st.markdown(
     """
-        <style>
-            header[data-testid="stHeader"] {
-                display: none;
-            }
-            
+        <style>            
             /* Sidebar wirklich oben beginnen lassen */
             [data-testid="stSidebar"] {
                 top: 0 !important;
