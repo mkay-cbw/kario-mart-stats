@@ -1,4 +1,3 @@
 pandas
 streamlit
-streamlit-float
 psycopg2-binary
