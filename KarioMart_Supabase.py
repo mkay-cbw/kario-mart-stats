@@ -4,7 +4,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
-from streamlit_float import *
 import psycopg2
 import warnings
 warnings.filterwarnings('ignore', message='.*pandas only supports SQLAlchemy.*')
@@ -18,7 +17,6 @@ def init_connection():
     return psycopg2.connect(**st.secrets["postgres"])
 conn = init_connection()
 cursor = conn.cursor()
-float_init()
 
 # ==========================================
 # 2. SESSION STATES
@@ -72,7 +70,6 @@ def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None
     """Generates two 1x6 Segmented Controls and validates the input."""
     title = custom_title if custom_title else f"**{name}:**"
     st.write(title)
-    # st.write("")
 
     val1 = default_val if default_val in [1, 2, 3, 4, 5, 6] else None
     val2 = default_val if default_val in [7, 8, 9, 10, 11, 12] else None
@@ -441,55 +438,15 @@ def get_history_list():
 
 
 # ==========================================
-# 3. PAGE CONFIG & DATABASE INITIALIZATION
+# 3. PAGE CONFIG
 # ==========================================
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
 
 # Custom CSS for tabs
-st.markdown(
-    f"""
-        <style>        
-        /* Remove top padding */
-        [data-testid="stMainBlockContainer"],
-        .main .block-container {{
-            padding-top: 3.5rem !important;
-            margin-top: 0 !important;
-        }}
+pass
 
-
-        /* Font size */
-        .st-key-tabs div[data-baseweb="button-group"] button div {{
-            font-size: {st.secrets["custom_theme"]["font_size"]}px !important;
-        }}
-        
-        /* Reset buttons */
-        .st-key-tabs div[data-baseweb="button-group"] button {{
-            border: none !important;
-            margin: 0 !important;
-            box-sizing: border-box !important;
-        }}
-        
-        /* Lines between buttons */
-        .st-key-tabs div[data-baseweb="button-group"] button + button {{
-            border-left: {st.secrets["custom_theme"]["border"]}px solid {st.secrets["custom_theme"]["color"]} !important;
-        }}
-        
-         /* Border */
-        .st-key-tabs div[data-baseweb="button-group"] {{
-            border: {st.secrets["custom_theme"]["border"]}px solid {st.secrets["custom_theme"]["color"]} !important;
-            border-radius: {st.secrets["custom_theme"]["border_radius"]}px; 
-            overflow: hidden !important;
-        }}
-        </style>
-    """,
-    unsafe_allow_html=True,
-)
-tab1, tab2, tab3, tab4, tab5 = "🎮", "👤", "🏁", "⚔️", "📋"
-container = st.container(width="stretch")
-with container:
-    tab = st.segmented_control("Tabs", options=[tab1, tab2, tab3, tab4, tab5], default=tab1, width="stretch", label_visibility="collapsed", key="tabs")
-css_config = float_css_helper(background="var(--default-backgroundColor)", transform="translate(-50%)", width="90%", max_width="700px", top="4rem", left="calc(var(--sidebar-width, 0px) + (100vw - var(--sidebar-width, 0px)) / 2)", z_index="999")
-container.float(css_config)
+st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎮", "👤", "🏁", "⚔️", "📋"])
 
 # Sidebar
 with st.sidebar:
@@ -525,117 +482,120 @@ with st.sidebar:
             st.session_state.master = False
             st.rerun()
 
+# ==========================================
+# 3. DATABASE INITIALIZATION AND SEED DATA
+# ==========================================
+#
 # Database initialization
 # cursor.execute("""
 #     CREATE TABLE IF NOT EXISTS players (
-#         id SERIAL PRIMARY KEY, 
+#         id SERIAL PRIMARY KEY,
 #         name TEXT NOT NULL UNIQUE
 #     );
 # """)
 # cursor.execute("""
 #     CREATE TABLE IF NOT EXISTS tracks (
-#         id SERIAL PRIMARY KEY, 
-#         name TEXT NOT NULL UNIQUE, 
+#         id SERIAL PRIMARY KEY,
+#         name TEXT NOT NULL UNIQUE,
 #         cup TEXT NOT NULL
 #     );
 # """)
 # cursor.execute("""
 #     CREATE TABLE IF NOT EXISTS points_mapping (
-#         placement INTEGER PRIMARY KEY CHECK (placement BETWEEN 1 AND 12), 
+#         placement INTEGER PRIMARY KEY CHECK (placement BETWEEN 1 AND 12),
 #         points INTEGER NOT NULL
 #     );
 # """)
 # cursor.execute("""
 #     CREATE TABLE IF NOT EXISTS tournaments (
-#         id SERIAL PRIMARY KEY, 
+#         id SERIAL PRIMARY KEY,
 #         date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 #     );
 # """)
 # cursor.execute("""
 #     CREATE TABLE IF NOT EXISTS races (
-#         id SERIAL PRIMARY KEY, 
-#         tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE, 
-#         track_name TEXT REFERENCES tracks(name) ON DELETE RESTRICT, 
+#         id SERIAL PRIMARY KEY,
+#         tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE,
+#         track_name TEXT REFERENCES tracks(name) ON DELETE RESTRICT,
 #         picked_by_name TEXT REFERENCES players(name) ON DELETE SET NULL
 #     );
 # """)
 # cursor.execute("""
 #     CREATE TABLE IF NOT EXISTS race_results (
-#         id SERIAL PRIMARY KEY, 
-#         race_id INTEGER REFERENCES races(id) ON DELETE CASCADE, 
-#         player_name TEXT REFERENCES players(name) ON DELETE CASCADE, 
-#         placement INTEGER REFERENCES points_mapping(placement), 
+#         id SERIAL PRIMARY KEY,
+#         race_id INTEGER REFERENCES races(id) ON DELETE CASCADE,
+#         player_name TEXT REFERENCES players(name) ON DELETE CASCADE,
+#         placement INTEGER REFERENCES points_mapping(placement),
 #         UNIQUE (race_id, player_name)
 #     );
 # """)
 # cursor.execute("""
 #     CREATE TABLE IF NOT EXISTS tournament_results (
-#         id SERIAL PRIMARY KEY, 
-#         tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE, 
-#         player_name TEXT REFERENCES players(name) ON DELETE CASCADE, 
-#         final_placement INTEGER CHECK (final_placement BETWEEN 1 AND 12), 
-#         beer_finished_after INTEGER, 
-#         kario INTEGER, 
+#         id SERIAL PRIMARY KEY,
+#         tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE,
+#         player_name TEXT REFERENCES players(name) ON DELETE CASCADE,
+#         final_placement INTEGER CHECK (final_placement BETWEEN 1 AND 12),
+#         beer_finished_after INTEGER,
+#         kario INTEGER,
 #         UNIQUE (tournament_id, player_name)
 #     );
 # """)
 # conn.commit()
 
+# Seed data
+# points_mapping_count = get_points_mapping_count()
+# if points_mapping_count == 0:
+# 
+#     # Points mapping
+#     points_data = [(1, 15), (2, 12), (3, 10), (4, 9), (5, 8), (6, 7), (7, 6), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
+#     cursor.executemany("""
+#         INSERT INTO points_mapping (placement, points)
+#         VALUES (%s, %s);
+#     """, points_data)
+# 
+#     # Player data
+#     player_data = [("Anja",), ("Pfeiffer",), ("Markus",)]
+#     cursor.executemany("""
+#         INSERT INTO players (name)
+#         VALUES (%s);
+#     """, player_data)
+# 
+#     # Track data
+#     track_data = [
+#         ("Mario Kart-Stadion", "Pilz-Cup"), ("Wasserpark", "Pilz-Cup"), ("Zuckersüßer Canyon", "Pilz-Cup"), ("Steinblock-Ruinen", "Pilz-Cup"),
+#         ("Marios Piste", "Blumen-Cup"), ("Toads Hafenstadt", "Blumen-Cup"), ("Gruselwusel-Villa", "Blumen-Cup"), ("Shy Guys Wasserfälle", "Blumen-Cup"),
+#         ("Sonnenflughafen", "Stern-Cup"), ("Delfinlagune", "Stern-Cup"), ("Discodrom", "Stern-Cup"), ("Wario-Abfahrt", "Stern-Cup"),
+#         ("Wolkenstraße", "Spezial-Cup"), ("Knochentrockene Dünen", "Spezial-Cup"), ("Bowsers Festung", "Spezial-Cup"), ("Regenbogen-Boulevard", "Spezial-Cup"),
+#         ("Wii Kuhmuh-Weide", "Panzer-Cup"), ("GBA Marios Piste", "Panzer-Cup"), ("DS Cheep-Cheep-Strand", "Panzer-Cup"), ("N64 Toads Autobahn", "Panzer-Cup"),
+#         ("GCN Staubtrockene Wüste", "Bananen-Cup"), ("SNES Donut-Ebene 3", "Bananen-Cup"), ("N64 Königliche Rennpiste", "Bananen-Cup"), ("3DS DK Dschungel", "Bananen-Cup"),
+#         ("DS Wario-Arena", "Blatt-Cup"), ("GCN Sorbet-Land", "Blatt-Cup"), ("3DS Instrumentalpiste", "Blatt-Cup"), ("N64 Yoshi-Tal", "Blatt-Cup"),
+#         ("DS Ticktack-Trauma", "Blitz-Cup"), ("3DS Röhrenraserei", "Blitz-Cup"), ("Wii Vulkangrollen", "Blitz-Cup"), ("N64 Regenbogen-Boulevard", "Blitz-Cup"),
+#         ("GCN Yoshis Piste", "Ei-Cup"), ("Excitebike-Stadion", "Ei-Cup"), ("Große Drachenmauer", "Ei-Cup"), ("Mute City", "Ei-Cup"),
+#         ("Wii Warios Goldmine", "Triforce-Cup"), ("SNES Regenbogen-Boulevard", "Triforce-Cup"), ("Polarkreis-Parcours", "Triforce-Cup"), ("Hyrule-Piste", "Triforce-Cup"),
+#         ("GCN Baby-Park", "Crossing-Cup"), ("GBA Käseland", "Crossing-Cup"), ("Wilder Wipfelweg", "Crossing-Cup"), ("Animal Crossing-Dorf", "Crossing-Cup"),
+#         ("3DS Koopa-Großstadtfieber", "Glocken-Cup"), ("GBA Party-Straße", "Glocken-Cup"), ("Marios-Metro", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
+#         ("Tour Paris-Parcours", "Goldener Turbo-Cup"), ("3DS Toads Piste", "Goldener Turbo-Cup"), ("N64 Schoko-Sumpf", "Goldener Turbo-Cup"), ("Wii Kokos-Promenade", "Goldener Turbo-Cup"),
+#         ("Tour Tokio-Tempotour", "Glückskatzen-Cup"), ("DS Pilz-Pass", "Glückskatzen-Cup"), ("GBA Wolkenpiste", "Glückskatzen-Cup"), ("Tour Ninja-Dojo", "Glückskatzen-Cup"),
+#         ("Tour New-York-Speedway", "Rüben-Cup"), ("SNES Marios Piste 3", "Rüben-Cup"), ("N64 Kalimari-Wüste", "Rüben-Cup"), ("DS Waluigi-Flipper", "Rüben-Cup"),
+#         ("Tour Sydney-Spritztour", "Propeller-Cup"), ("GBA Schneeland", "Propeller-Cup"), ("Wii Pilz-Schlucht", "Propeller-Cup"), ("Eiscreme-Eskapade", "Propeller-Cup"),
+#         ("Tour London-Tour", "Fels-Cup"), ("GBA Buu-Huu-Tal", "Fels-Cup"), ("3DS Gebirgspfad", "Fels-Cup"), ("Wii Blätterwald", "Fels-Cup"),
+#         ("Tour Pflaster von Berlin", "Mond-Cup"), ("DS Peachs Schlossgarten", "Mond-Cup"), ("Tour Bergbescherung", "Mond-Cup"), ("3DS Regenbogen-Boulevard", "Mond-Cup"),
+#         ("Tour Ausfahrt Amsterdam", "Frucht-Cup"), ("GBA Flussufer-Park", "Frucht-Cup"), ("Wii DK Skikane", "Frucht-Cup"), ("Yoshis Eiland", "Frucht-Cup"),
+#         ("Tour Bangkok-Abendrot", "Bumerang-Cup"), ("DS Marios Piste", "Bumerang-Cup"), ("GCN Waluigi-Arena", "Bumerang-Cup"), ("Tour Überholspur Singapur", "Bumerang-Cup"),
+#         ("Tour Athen auf Abwegen", "Feder-Cup"), ("GCN Daisys Dampfer", "Feder-Cup"), ("Wii Mondblickstraße", "Feder-Cup"), ("Bad-Parcours", "Feder-Cup"),
+#         ("Tour Los-Angeles-Strandpartie", "Doppelkirschen-Cup"), ("GBA Sonnenuntergangs-Wüste", "Doppelkirschen-Cup"), ("Wii Koopa-Kap", "Doppelkirschen-Cup"), ("Tour Vancouver-Wildpfad", "Doppelkirschen-Cup"),
+#         ("Tour Rom-Rambazamba", "Eichel-Cup"), ("GCN DK-Bergland", "Eichel-Cup"), ("Wii Daisys Piste", "Eichel-Cup"), ("Tour Piranha-Pflanzen-Bucht", "Eichel-Cup"),
+#         ("Tour Stadtrundfahrt Madrid", "Stachi-Cup"), ("3DS Rosalinas Eisplanet", "Stachi-Cup"), ("SNES Bowsers Festung 3", "Stachi-Cup"), ("Wii Regenbogen-Boulevard", "Stachi-Cup")
+#     ]
+#     cursor.executemany("""
+#         INSERT INTO tracks (name, cup)
+#         VALUES (%s, %s);
+#     """, track_data)
+# 
+#     conn.commit()
+#     st.cache_data.clear()
+#     st.rerun()
 # ==========================================
-# 4. SEED DATA
-# ==========================================
-points_mapping_count = get_points_mapping_count()
-if points_mapping_count == 0:
-
-    # Points mapping
-    points_data = [(1, 15), (2, 12), (3, 10), (4, 9), (5, 8), (6, 7), (7, 6), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
-    cursor.executemany("""
-        INSERT INTO points_mapping (placement, points)
-        VALUES (%s, %s);
-    """, points_data)
-
-    # Player data
-    player_data = [("Anja",), ("Pfeiffer",), ("Markus",)]
-    cursor.executemany("""
-        INSERT INTO players (name)
-        VALUES (%s);
-    """, player_data)
-
-    # Track data
-    track_data = [
-        ("Mario Kart-Stadion", "Pilz-Cup"), ("Wasserpark", "Pilz-Cup"), ("Zuckersüßer Canyon", "Pilz-Cup"), ("Steinblock-Ruinen", "Pilz-Cup"),
-        ("Marios Piste", "Blumen-Cup"), ("Toads Hafenstadt", "Blumen-Cup"), ("Gruselwusel-Villa", "Blumen-Cup"), ("Shy Guys Wasserfälle", "Blumen-Cup"),
-        ("Sonnenflughafen", "Stern-Cup"), ("Delfinlagune", "Stern-Cup"), ("Discodrom", "Stern-Cup"), ("Wario-Abfahrt", "Stern-Cup"),
-        ("Wolkenstraße", "Spezial-Cup"), ("Knochentrockene Dünen", "Spezial-Cup"), ("Bowsers Festung", "Spezial-Cup"), ("Regenbogen-Boulevard", "Spezial-Cup"),
-        ("Wii Kuhmuh-Weide", "Panzer-Cup"), ("GBA Marios Piste", "Panzer-Cup"), ("DS Cheep-Cheep-Strand", "Panzer-Cup"), ("N64 Toads Autobahn", "Panzer-Cup"),
-        ("GCN Staubtrockene Wüste", "Bananen-Cup"), ("SNES Donut-Ebene 3", "Bananen-Cup"), ("N64 Königliche Rennpiste", "Bananen-Cup"), ("3DS DK Dschungel", "Bananen-Cup"),
-        ("DS Wario-Arena", "Blatt-Cup"), ("GCN Sorbet-Land", "Blatt-Cup"), ("3DS Instrumentalpiste", "Blatt-Cup"), ("N64 Yoshi-Tal", "Blatt-Cup"),
-        ("DS Ticktack-Trauma", "Blitz-Cup"), ("3DS Röhrenraserei", "Blitz-Cup"), ("Wii Vulkangrollen", "Blitz-Cup"), ("N64 Regenbogen-Boulevard", "Blitz-Cup"),
-        ("GCN Yoshis Piste", "Ei-Cup"), ("Excitebike-Stadion", "Ei-Cup"), ("Große Drachenmauer", "Ei-Cup"), ("Mute City", "Ei-Cup"),
-        ("Wii Warios Goldmine", "Triforce-Cup"), ("SNES Regenbogen-Boulevard", "Triforce-Cup"), ("Polarkreis-Parcours", "Triforce-Cup"), ("Hyrule-Piste", "Triforce-Cup"),
-        ("GCN Baby-Park", "Crossing-Cup"), ("GBA Käseland", "Crossing-Cup"), ("Wilder Wipfelweg", "Crossing-Cup"), ("Animal Crossing-Dorf", "Crossing-Cup"),
-        ("3DS Koopa-Großstadtfieber", "Glocken-Cup"), ("GBA Party-Straße", "Glocken-Cup"), ("Marios-Metro", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
-        ("Tour Paris-Parcours", "Goldener Turbo-Cup"), ("3DS Toads Piste", "Goldener Turbo-Cup"), ("N64 Schoko-Sumpf", "Goldener Turbo-Cup"), ("Wii Kokos-Promenade", "Goldener Turbo-Cup"),
-        ("Tour Tokio-Tempotour", "Glückskatzen-Cup"), ("DS Pilz-Pass", "Glückskatzen-Cup"), ("GBA Wolkenpiste", "Glückskatzen-Cup"), ("Tour Ninja-Dojo", "Glückskatzen-Cup"),
-        ("Tour New-York-Speedway", "Rüben-Cup"), ("SNES Marios Piste 3", "Rüben-Cup"), ("N64 Kalimari-Wüste", "Rüben-Cup"), ("DS Waluigi-Flipper", "Rüben-Cup"),
-        ("Tour Sydney-Spritztour", "Propeller-Cup"), ("GBA Schneeland", "Propeller-Cup"), ("Wii Pilz-Schlucht", "Propeller-Cup"), ("Eiscreme-Eskapade", "Propeller-Cup"),
-        ("Tour London-Tour", "Fels-Cup"), ("GBA Buu-Huu-Tal", "Fels-Cup"), ("3DS Gebirgspfad", "Fels-Cup"), ("Wii Blätterwald", "Fels-Cup"),
-        ("Tour Pflaster von Berlin", "Mond-Cup"), ("DS Peachs Schlossgarten", "Mond-Cup"), ("Tour Bergbescherung", "Mond-Cup"), ("3DS Regenbogen-Boulevard", "Mond-Cup"),
-        ("Tour Ausfahrt Amsterdam", "Frucht-Cup"), ("GBA Flussufer-Park", "Frucht-Cup"), ("Wii DK Skikane", "Frucht-Cup"), ("Yoshis Eiland", "Frucht-Cup"),
-        ("Tour Bangkok-Abendrot", "Bumerang-Cup"), ("DS Marios Piste", "Bumerang-Cup"), ("GCN Waluigi-Arena", "Bumerang-Cup"), ("Tour Überholspur Singapur", "Bumerang-Cup"),
-        ("Tour Athen auf Abwegen", "Feder-Cup"), ("GCN Daisys Dampfer", "Feder-Cup"), ("Wii Mondblickstraße", "Feder-Cup"), ("Bad-Parcours", "Feder-Cup"),
-        ("Tour Los-Angeles-Strandpartie", "Doppelkirschen-Cup"), ("GBA Sonnenuntergangs-Wüste", "Doppelkirschen-Cup"), ("Wii Koopa-Kap", "Doppelkirschen-Cup"), ("Tour Vancouver-Wildpfad", "Doppelkirschen-Cup"),
-        ("Tour Rom-Rambazamba", "Eichel-Cup"), ("GCN DK-Bergland", "Eichel-Cup"), ("Wii Daisys Piste", "Eichel-Cup"), ("Tour Piranha-Pflanzen-Bucht", "Eichel-Cup"),
-        ("Tour Stadtrundfahrt Madrid", "Stachi-Cup"), ("3DS Rosalinas Eisplanet", "Stachi-Cup"), ("SNES Bowsers Festung 3", "Stachi-Cup"), ("Wii Regenbogen-Boulevard", "Stachi-Cup")
-    ]
-    cursor.executemany("""
-        INSERT INTO tracks (name, cup)
-        VALUES (%s, %s);
-    """, track_data)
-
-    conn.commit()
-    st.cache_data.clear()
-    st.rerun()
 
 # Get players and tracks for dropdowns
 df_players = get_df_players()
@@ -645,7 +605,7 @@ df_tracks = get_df_tracks()
 # ==========================================
 # TAB 1: TOURNAMENT TRACKING
 # ==========================================
-if tab == tab1:
+with tab1:
     if not st.session_state.authenticated:
         st.warning("🔒 Melde dich in der Sidebar an, um Turniere zu erfassen.")
     else:
@@ -940,7 +900,7 @@ if tab == tab1:
 # ==========================================
 # TAB 2: PLAYER PROFILES
 # ==========================================
-if tab == tab2:
+with tab2:
     header("Verwaltung")
     st.write("")
     with st.expander("**Spieler-Datenbank**"):
@@ -1074,7 +1034,7 @@ if tab == tab2:
 # ==========================================
 # TAB 3: TRACK DATABASE
 # ==========================================
-if tab == tab3:
+with tab3:
     header("Strecken-Statistiken")
     st.write("")
     st.write("**Strecke:**")
@@ -1104,7 +1064,7 @@ if tab == tab3:
 # ==========================================
 # TAB 4: HEAD-TO-HEAD
 # ==========================================
-if tab == tab4:
+with tab4:
     header("Vergleich")
     st.write("")
     st.write("**Spieler:**")
@@ -1148,7 +1108,7 @@ if tab == tab4:
 # ==========================================
 # TAB 5: HISTORY & EDITING
 # ==========================================
-if tab == tab5:
+with tab5:
     header("Turnierverlauf")
     st.write("")
 
