@@ -84,16 +84,16 @@ def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None
 
     return place1 if place1 is not None else place2
 
-def header(text, border=st.secrets["custom_theme"]["border"], color=st.secrets["custom_theme"]["color"], padding_v=st.secrets["custom_theme"]["padding_v"], padding_h=st.secrets["custom_theme"]["padding_h"], border_radius=st.secrets["custom_theme"]["border_radius"], font_size=st.secrets["custom_theme"]["font_size"], font_weight=st.secrets["custom_theme"]["font_weight"]):
+def header(text, font_size=st.secrets["custom_theme"]["font_size"], font_weight=st.secrets["custom_theme"]["font_weight"], border=st.secrets["custom_theme"]["border"], color=st.secrets["custom_theme"]["color"], padding_left=st.secrets["custom_theme"]["padding_left"]):
     st.markdown(
         f"""
             <p style="
-                font-size: {font_size}px; 
+                font-size: {font_size}; 
                 font-weight: {font_weight}; 
                 line-height: 1.5; 
                 color: #FAFAFA; 
-                border-left: {border * 2}px solid {color}; 
-                padding-left: {padding_h}px; margin: 10px 0;">
+                border-left: {border} solid {color}; 
+                padding-left: {padding_left}; margin: 10px 0;">
                 {text}
             </p>
         """,
@@ -440,13 +440,42 @@ def get_history_list():
 # ==========================================
 # 3. PAGE CONFIG
 # ==========================================
-st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
 
 # Custom CSS for tabs
-pass
+st.markdown(
+    f"""
+        <style>
+            div[data-testid="stMainBlockContainer"], .block-container {{
+                padding-top: {st.secrets["custom_theme"]["padding_top"]} !important; /* Wert nach Wunsch verringern (z.B. 0.5rem) */
+            }}
+            /* Force parent flex wrapper to span the full width */
+            div[data-testid="stTabs"] > div[data-orientation="horizontal"] {{
+                width: 100% !important;
+            }}
+        
+            /* Force tablist to span the full width of wrapper */
+            div[data-testid="stTabs"] div[role="tablist"] {{
+                width: 100% !important;
+            }}
+        
+            /* Force tabs to grow equally */
+            div[data-testid="stTabs"] div[role="tab"] {{
+                flex: 1 1 0% !important;
+                justify-content: center !important;
+            }}
+        
+            /* Increase font/icon size */
+            div[data-testid="stTabs"] div[role="tab"] p {{
+                font-size: {st.secrets["custom_theme"]["font_size"]} !important;
+                font-weight: {st.secrets["custom_theme"]["font_weight"]} !important; 
+            }}
+        </style>
+    """,
+    unsafe_allow_html=True
+)
 
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎮", "👤", "🏁", "⚔️", "📋"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎮", "👤", "🏁", "⚔️", "📋"], width="stretch")
 
 # Sidebar
 with st.sidebar:
@@ -482,122 +511,7 @@ with st.sidebar:
             st.session_state.master = False
             st.rerun()
 
-# ==========================================
-# 3. DATABASE INITIALIZATION AND SEED DATA
-# ==========================================
-#
-# Database initialization
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS players (
-#         id SERIAL PRIMARY KEY,
-#         name TEXT NOT NULL UNIQUE
-#     );
-# """)
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS tracks (
-#         id SERIAL PRIMARY KEY,
-#         name TEXT NOT NULL UNIQUE,
-#         cup TEXT NOT NULL
-#     );
-# """)
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS points_mapping (
-#         placement INTEGER PRIMARY KEY CHECK (placement BETWEEN 1 AND 12),
-#         points INTEGER NOT NULL
-#     );
-# """)
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS tournaments (
-#         id SERIAL PRIMARY KEY,
-#         date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-#     );
-# """)
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS races (
-#         id SERIAL PRIMARY KEY,
-#         tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE,
-#         track_name TEXT REFERENCES tracks(name) ON DELETE RESTRICT,
-#         picked_by_name TEXT REFERENCES players(name) ON DELETE SET NULL
-#     );
-# """)
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS race_results (
-#         id SERIAL PRIMARY KEY,
-#         race_id INTEGER REFERENCES races(id) ON DELETE CASCADE,
-#         player_name TEXT REFERENCES players(name) ON DELETE CASCADE,
-#         placement INTEGER REFERENCES points_mapping(placement),
-#         UNIQUE (race_id, player_name)
-#     );
-# """)
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS tournament_results (
-#         id SERIAL PRIMARY KEY,
-#         tournament_id INTEGER REFERENCES tournaments(id) ON DELETE CASCADE,
-#         player_name TEXT REFERENCES players(name) ON DELETE CASCADE,
-#         final_placement INTEGER CHECK (final_placement BETWEEN 1 AND 12),
-#         beer_finished_after INTEGER,
-#         kario INTEGER,
-#         UNIQUE (tournament_id, player_name)
-#     );
-# """)
-# conn.commit()
 
-# Seed data
-# points_mapping_count = get_points_mapping_count()
-# if points_mapping_count == 0:
-# 
-#     # Points mapping
-#     points_data = [(1, 15), (2, 12), (3, 10), (4, 9), (5, 8), (6, 7), (7, 6), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
-#     cursor.executemany("""
-#         INSERT INTO points_mapping (placement, points)
-#         VALUES (%s, %s);
-#     """, points_data)
-# 
-#     # Player data
-#     player_data = [("Anja",), ("Pfeiffer",), ("Markus",)]
-#     cursor.executemany("""
-#         INSERT INTO players (name)
-#         VALUES (%s);
-#     """, player_data)
-# 
-#     # Track data
-#     track_data = [
-#         ("Mario Kart-Stadion", "Pilz-Cup"), ("Wasserpark", "Pilz-Cup"), ("Zuckersüßer Canyon", "Pilz-Cup"), ("Steinblock-Ruinen", "Pilz-Cup"),
-#         ("Marios Piste", "Blumen-Cup"), ("Toads Hafenstadt", "Blumen-Cup"), ("Gruselwusel-Villa", "Blumen-Cup"), ("Shy Guys Wasserfälle", "Blumen-Cup"),
-#         ("Sonnenflughafen", "Stern-Cup"), ("Delfinlagune", "Stern-Cup"), ("Discodrom", "Stern-Cup"), ("Wario-Abfahrt", "Stern-Cup"),
-#         ("Wolkenstraße", "Spezial-Cup"), ("Knochentrockene Dünen", "Spezial-Cup"), ("Bowsers Festung", "Spezial-Cup"), ("Regenbogen-Boulevard", "Spezial-Cup"),
-#         ("Wii Kuhmuh-Weide", "Panzer-Cup"), ("GBA Marios Piste", "Panzer-Cup"), ("DS Cheep-Cheep-Strand", "Panzer-Cup"), ("N64 Toads Autobahn", "Panzer-Cup"),
-#         ("GCN Staubtrockene Wüste", "Bananen-Cup"), ("SNES Donut-Ebene 3", "Bananen-Cup"), ("N64 Königliche Rennpiste", "Bananen-Cup"), ("3DS DK Dschungel", "Bananen-Cup"),
-#         ("DS Wario-Arena", "Blatt-Cup"), ("GCN Sorbet-Land", "Blatt-Cup"), ("3DS Instrumentalpiste", "Blatt-Cup"), ("N64 Yoshi-Tal", "Blatt-Cup"),
-#         ("DS Ticktack-Trauma", "Blitz-Cup"), ("3DS Röhrenraserei", "Blitz-Cup"), ("Wii Vulkangrollen", "Blitz-Cup"), ("N64 Regenbogen-Boulevard", "Blitz-Cup"),
-#         ("GCN Yoshis Piste", "Ei-Cup"), ("Excitebike-Stadion", "Ei-Cup"), ("Große Drachenmauer", "Ei-Cup"), ("Mute City", "Ei-Cup"),
-#         ("Wii Warios Goldmine", "Triforce-Cup"), ("SNES Regenbogen-Boulevard", "Triforce-Cup"), ("Polarkreis-Parcours", "Triforce-Cup"), ("Hyrule-Piste", "Triforce-Cup"),
-#         ("GCN Baby-Park", "Crossing-Cup"), ("GBA Käseland", "Crossing-Cup"), ("Wilder Wipfelweg", "Crossing-Cup"), ("Animal Crossing-Dorf", "Crossing-Cup"),
-#         ("3DS Koopa-Großstadtfieber", "Glocken-Cup"), ("GBA Party-Straße", "Glocken-Cup"), ("Marios-Metro", "Glocken-Cup"), ("Big Blue", "Glocken-Cup"),
-#         ("Tour Paris-Parcours", "Goldener Turbo-Cup"), ("3DS Toads Piste", "Goldener Turbo-Cup"), ("N64 Schoko-Sumpf", "Goldener Turbo-Cup"), ("Wii Kokos-Promenade", "Goldener Turbo-Cup"),
-#         ("Tour Tokio-Tempotour", "Glückskatzen-Cup"), ("DS Pilz-Pass", "Glückskatzen-Cup"), ("GBA Wolkenpiste", "Glückskatzen-Cup"), ("Tour Ninja-Dojo", "Glückskatzen-Cup"),
-#         ("Tour New-York-Speedway", "Rüben-Cup"), ("SNES Marios Piste 3", "Rüben-Cup"), ("N64 Kalimari-Wüste", "Rüben-Cup"), ("DS Waluigi-Flipper", "Rüben-Cup"),
-#         ("Tour Sydney-Spritztour", "Propeller-Cup"), ("GBA Schneeland", "Propeller-Cup"), ("Wii Pilz-Schlucht", "Propeller-Cup"), ("Eiscreme-Eskapade", "Propeller-Cup"),
-#         ("Tour London-Tour", "Fels-Cup"), ("GBA Buu-Huu-Tal", "Fels-Cup"), ("3DS Gebirgspfad", "Fels-Cup"), ("Wii Blätterwald", "Fels-Cup"),
-#         ("Tour Pflaster von Berlin", "Mond-Cup"), ("DS Peachs Schlossgarten", "Mond-Cup"), ("Tour Bergbescherung", "Mond-Cup"), ("3DS Regenbogen-Boulevard", "Mond-Cup"),
-#         ("Tour Ausfahrt Amsterdam", "Frucht-Cup"), ("GBA Flussufer-Park", "Frucht-Cup"), ("Wii DK Skikane", "Frucht-Cup"), ("Yoshis Eiland", "Frucht-Cup"),
-#         ("Tour Bangkok-Abendrot", "Bumerang-Cup"), ("DS Marios Piste", "Bumerang-Cup"), ("GCN Waluigi-Arena", "Bumerang-Cup"), ("Tour Überholspur Singapur", "Bumerang-Cup"),
-#         ("Tour Athen auf Abwegen", "Feder-Cup"), ("GCN Daisys Dampfer", "Feder-Cup"), ("Wii Mondblickstraße", "Feder-Cup"), ("Bad-Parcours", "Feder-Cup"),
-#         ("Tour Los-Angeles-Strandpartie", "Doppelkirschen-Cup"), ("GBA Sonnenuntergangs-Wüste", "Doppelkirschen-Cup"), ("Wii Koopa-Kap", "Doppelkirschen-Cup"), ("Tour Vancouver-Wildpfad", "Doppelkirschen-Cup"),
-#         ("Tour Rom-Rambazamba", "Eichel-Cup"), ("GCN DK-Bergland", "Eichel-Cup"), ("Wii Daisys Piste", "Eichel-Cup"), ("Tour Piranha-Pflanzen-Bucht", "Eichel-Cup"),
-#         ("Tour Stadtrundfahrt Madrid", "Stachi-Cup"), ("3DS Rosalinas Eisplanet", "Stachi-Cup"), ("SNES Bowsers Festung 3", "Stachi-Cup"), ("Wii Regenbogen-Boulevard", "Stachi-Cup")
-#     ]
-#     cursor.executemany("""
-#         INSERT INTO tracks (name, cup)
-#         VALUES (%s, %s);
-#     """, track_data)
-# 
-#     conn.commit()
-#     st.cache_data.clear()
-#     st.rerun()
-# ==========================================
-
-# Get players and tracks for dropdowns
 df_players = get_df_players()
 df_tracks = get_df_tracks()
 
@@ -1085,21 +999,21 @@ with tab4:
             c1, c2 = st.columns(2)
             with c1:
                 st.write("**Rennsiege**")
-                st.bar_chart(df_h2h_r.groupby("player")["race_win"].sum().reset_index().set_index("player"), color="#FF4B4B")
+                st.bar_chart(df_h2h_r.groupby("player")["race_win"].sum().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
                 st.write("**Ø-Platz Rennen ↓**")
-                st.bar_chart(df_h2h_r.groupby("player")["placement"].mean().reset_index().set_index("player"), color="#FF4B4B")
+                st.bar_chart(df_h2h_r.groupby("player")["placement"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
                 st.write("**Ø-Punkte / Rennen**")
-                st.bar_chart(df_h2h_r.groupby("player")["points"].mean().reset_index().set_index("player"), color="#FF4B4B")
+                st.bar_chart(df_h2h_r.groupby("player")["points"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
 
             with c2:
                 if h2h_track == "Alle Strecken":
                     if not df_h2h_t.empty:
                         st.write("**Turniersiege**")
-                        st.bar_chart(df_h2h_t.groupby("player")["tournament_win"].sum().reset_index().set_index("player"), color="#FF4B4B")
+                        st.bar_chart(df_h2h_t.groupby("player")["tournament_win"].sum().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
                         st.write("**Ø-Platz Turnier ↓**")
-                        st.bar_chart(df_h2h_t.groupby("player")["final_placement"].mean().reset_index().set_index("player"), color="#FF4B4B")
+                        st.bar_chart(df_h2h_t.groupby("player")["final_placement"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
                         st.write("**Ø-Punkte / Turnier**")
-                        st.bar_chart(df_h2h_t.groupby("player")["tournament_points"].mean().reset_index().set_index("player"), color="#FF4B4B")
+                        st.bar_chart(df_h2h_t.groupby("player")["tournament_points"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
                 else:
                     st.info("Turnier-Statistiken bei Streckenfilter ausgeblendet.")
         else:
