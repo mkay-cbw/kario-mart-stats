@@ -18,6 +18,7 @@ def init_connection():
 conn = init_connection()
 cursor = conn.cursor()
 
+
 # ==========================================
 # 2. SESSION STATES
 # ==========================================
@@ -29,10 +30,10 @@ if "master" not in st.session_state:
     st.session_state.master = False
 
 # Tournament parameters
-if "tournament_id" not in st.session_state:
-    st.session_state.tournament_id = None
 if "active_players" not in st.session_state:
     st.session_state.active_players = []
+if "event" not in st.session_state:
+    st.session_state.event = None
 if "total_races" not in st.session_state:
     st.session_state.total_races = 4
 if "selection_mode" not in st.session_state:
@@ -55,6 +56,8 @@ if "waiting_for_placement" not in st.session_state:
 # Security prompts
 if "confirm_delete_player" not in st.session_state:
     st.session_state.confirm_delete_player = None
+if "confirm_delete_event" not in st.session_state:
+    st.session_state.confirm_delete_event = None
 if "confirm_delete_tournament" not in st.session_state:
     st.session_state.confirm_delete_tournament = None
 
@@ -66,7 +69,7 @@ def has_duplicates(lst):
     """Checks for duplicates in a list."""
     return len(lst) != len(set(lst))
 
-def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None, disabled=False):
+def placement_selection(name, prefix_key, default_val=None, custom_title=None, disabled=False):
     """Generates two 1x6 Segmented Controls and validates the input."""
     title = custom_title if custom_title else f"**{name}:**"
     st.write(title)
@@ -84,20 +87,37 @@ def ui_placement_selection(name, prefix_key, default_val=None, custom_title=None
 
     return place1 if place1 is not None else place2
 
-def header(text, font_size=st.secrets["custom_theme"]["font_size"], font_weight=st.secrets["custom_theme"]["font_weight"], border=st.secrets["custom_theme"]["border"], color=st.secrets["custom_theme"]["color"], padding_left=st.secrets["custom_theme"]["padding_left"]):
-    st.markdown(
+def semibold(text, font_size=st.secrets["custom_theme"]["base_font_size"], font_weight=st.secrets["custom_theme"]["semibold_font_weight"], font_color=st.secrets["custom_theme"]["font_color"], padding_bottom=st.secrets["custom_theme"]["padding_bottom"]):
+    st.html(
+        f"""
+            <p style="
+                font-size: {font_size}; 
+                font-weight: {font_weight}; 
+                color: {font_color}; 
+                margin-bottom: {padding_bottom};
+            ">
+                {text}
+            </p>
+        """,
+        unsafe_allow_javascript=True
+)
+
+def header(text, font_size=st.secrets["custom_theme"]["header_font_size"], font_weight=st.secrets["custom_theme"]["bold_font_weight"], font_color=st.secrets["custom_theme"]["font_color"], border=st.secrets["custom_theme"]["border"], highlight_color=st.secrets["custom_theme"]["highlight_color"], padding_left=st.secrets["custom_theme"]["padding_left"], padding_bottom=st.secrets["custom_theme"]["padding_bottom"]):
+    st.html(
         f"""
             <p style="
                 font-size: {font_size}; 
                 font-weight: {font_weight}; 
                 line-height: 1.5; 
-                color: #FAFAFA; 
-                border-left: {border} solid {color}; 
-                padding-left: {padding_left}; margin: 10px 0;">
+                color: {font_color}; 
+                border-left: {border} solid {highlight_color}; 
+                padding-left: {padding_left}; margin: 10px 0;
+                margin-bottom: {padding_bottom};
+            ">
                 {text}
             </p>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_javascript=True
 )
 
 # ==========================================
@@ -119,6 +139,10 @@ def get_df_players():
 @st.cache_data
 def get_df_tracks():
     return pd.read_sql_query("SELECT * FROM tracks ORDER BY name ASC;", conn)
+
+@st.cache_data
+def get_df_events():
+    return pd.read_sql_query("SELECT * FROM events ORDER BY name ASC;", conn)
 
 @st.cache_data
 def get_df_h2h_track(track_name, players):
@@ -167,7 +191,31 @@ def get_df_avg_track(track_name, players):
     return pd.read_sql_query(query, conn, params=params)
 
 @st.cache_data
-def get_player_stats(profile_name, kario_cond, kario_cond_tr2):
+def get_player_stats(profile_name, event_filter, mode_filter, track_filter):
+    # Filter conditions
+    filter_cond = ""
+    filter_cond_2 = ""
+    if mode_filter == "Kario":
+        filter_cond += " AND tr.kario = 1"
+        filter_cond_2 += " AND tr2.kario = 1"
+    elif mode_filter == "Mario":
+        filter_cond += " AND tr.kario = 0"
+        filter_cond_2 += " AND tr2.kario = 0"
+    if event_filter != "Alle Events":
+        filter_cond += " AND tr.event_name = %s"
+        filter_cond_2 += " AND tr2.event_name = %s"
+    if track_filter != "Alle Strecken":
+        filter_cond += " AND r.track_name = %s"
+        
+    # Params
+    params = [profile_name]
+    params_2=[profile_name, profile_name]
+    if event_filter != "Alle Events":
+        params += [event_filter]
+        params_2 = [profile_name, event_filter, profile_name, event_filter]
+    if track_filter != "Alle Strecken":
+        params += [track_filter]
+
     query_races = f"""
         SELECT 
             COUNT(rr.id) as total_races,
@@ -181,58 +229,62 @@ def get_player_stats(profile_name, kario_cond, kario_cond_tr2):
         JOIN races r ON rr.race_id = r.id 
         JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND rr.player_name = tr.player_name 
         WHERE rr.player_name = %s 
-        {kario_cond};
+        {filter_cond};
     """
-    df_races = pd.read_sql_query(query_races, conn, params=(profile_name,))
+    df_races = pd.read_sql_query(query_races, conn, params=params).iloc[0]
 
-    query_tournaments = f"""
-        SELECT 
-            COUNT(DISTINCT tr.tournament_id) as total_tournaments,
-            AVG(tr.final_placement) as avg_tournament_placement,
-            SUM(CASE WHEN tr.final_placement = 1 THEN 1 ELSE 0 END) as tournament_wins,
-            AVG(tr.beer_finished_after) as avg_beer_finished_after
-        FROM tournament_results tr 
-        WHERE tr.player_name = %s 
-        {kario_cond};
-    """
-    df_tournaments = pd.read_sql_query(query_tournaments, conn, params=(profile_name,))
+    df_tournaments = None
+    df_best = None
+    df_fav = None
+    if track_filter == "Alle Strecken":
+        query_tournaments = f"""
+            SELECT 
+                COUNT(DISTINCT tr.tournament_id) as total_tournaments,
+                AVG(tr.final_placement) as avg_tournament_placement,
+                SUM(CASE WHEN tr.final_placement = 1 THEN 1 ELSE 0 END) as tournament_wins,
+                AVG(tr.beer_finished_after) as avg_beer_finished_after
+            FROM tournament_results tr 
+            WHERE tr.player_name = %s 
+            {filter_cond};
+        """
+        df_tournaments = pd.read_sql_query(query_tournaments, conn, params=params).iloc[0]
 
-    query_best = f"""
-        SELECT 
-            r.track_name as "Strecke", 
-            COUNT(rr.id) as "Gefahren", 
-            ROUND(AVG(rr.placement), 2) as "Ø-Platz" 
-        FROM race_results rr 
-        JOIN races r ON rr.race_id = r.id 
-        JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND rr.player_name = tr.player_name 
-        WHERE rr.player_name = %s 
-        {kario_cond} 
-        GROUP BY r.track_name ORDER BY AVG(rr.placement) ASC LIMIT 5;
-    """
-    df_best = pd.read_sql_query(query_best, conn, params=(profile_name,))
+        query_best = f"""
+            SELECT 
+                r.track_name as "Strecke", 
+                COUNT(rr.id) as "Gefahren", 
+                ROUND(AVG(rr.placement), 2) as "Ø-Platz" 
+            FROM race_results rr 
+            JOIN races r ON rr.race_id = r.id 
+            JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND rr.player_name = tr.player_name 
+            WHERE rr.player_name = %s 
+            {filter_cond} 
+            GROUP BY r.track_name ORDER BY AVG(rr.placement) ASC LIMIT 5;
+        """
+        df_best = pd.read_sql_query(query_best, conn, params=params)
 
-    query_favorites = f"""
-        SELECT 
-            r.track_name as "Strecke", 
-            COUNT(r.id) as "Gewählt", 
-            ROUND((
-                SELECT AVG(rr2.placement) 
-                FROM race_results rr2 
-                JOIN races r2 ON rr2.race_id = r2.id 
-                JOIN tournament_results tr2 ON r2.tournament_id = tr2.tournament_id AND rr2.player_name = tr2.player_name 
-                WHERE r2.track_name = r.track_name 
-                AND rr2.player_name = %s 
-                {kario_cond_tr2}
-            ), 2) as "Ø-Platz" 
-        FROM races r 
-        JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND tr.player_name = r.picked_by_name 
-        WHERE r.picked_by_name = %s 
-        {kario_cond} 
-        GROUP BY r.track_name ORDER BY COUNT(r.id) DESC, r.track_name ASC LIMIT 5;
-    """
-    df_fav = pd.read_sql_query(query_favorites, conn, params=(profile_name, profile_name))
+        query_favorites = f"""
+            SELECT 
+                r.track_name as "Strecke", 
+                COUNT(r.id) as "Gewählt", 
+                ROUND((
+                    SELECT AVG(rr2.placement) 
+                    FROM race_results rr2 
+                    JOIN races r2 ON rr2.race_id = r2.id 
+                    JOIN tournament_results tr2 ON r2.tournament_id = tr2.tournament_id AND rr2.player_name = tr2.player_name 
+                    WHERE r2.track_name = r.track_name 
+                    AND rr2.player_name = %s 
+                    {filter_cond_2}
+                ), 2) as "Ø-Platz" 
+            FROM races r 
+            JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND tr.player_name = r.picked_by_name 
+            WHERE r.picked_by_name = %s 
+            {filter_cond} 
+            GROUP BY r.track_name ORDER BY COUNT(r.id) DESC, r.track_name ASC LIMIT 5;
+        """
+        df_fav = pd.read_sql_query(query_favorites, conn, params=params_2)
 
-    return df_races.iloc[0], df_tournaments.iloc[0], df_best, df_fav
+    return df_races, df_tournaments, df_best, df_fav
 
 @st.cache_data
 def get_track_stats(selected_track):
@@ -292,9 +344,11 @@ def get_track_stats(selected_track):
     return df_play_count, df_most_picked, df_placement, df_points, df_wins
 
 @st.cache_data
-def get_h2h_data(players, h2h_track, h2h_mode):
+def get_h2h_data(players, event_filter, track_filter, mode_filter):
     h2h_placeholders = ",".join(["%s"] * len(players))
-    h2h_kario_cond = " AND tr.kario = 1" if h2h_mode == "Kario" else (" AND tr.kario = 0" if h2h_mode == "Mario" else "")
+    event_cond = " AND tr.event_name = %s" if event_filter != "Alle Events" else ""
+    track_cond = " AND r.track_name = %s" if track_filter != "Alle Strecken" else ""
+    mode_cond = " AND tr.kario = 1" if mode_filter == "Kario" else (" AND tr.kario = 0" if mode_filter == "Mario" else "")
     subquery_shared = f"""
         SELECT r.tournament_id 
         FROM race_results rr 
@@ -302,7 +356,6 @@ def get_h2h_data(players, h2h_track, h2h_mode):
         WHERE rr.player_name IN ({h2h_placeholders}) 
         GROUP BY r.tournament_id HAVING COUNT(DISTINCT rr.player_name) = %s
     """
-    track_condition = " AND r.track_name = %s" if h2h_track != "Alle Strecken" else ""
 
     query_h2h_r = f"""
         SELECT 
@@ -316,13 +369,16 @@ def get_h2h_data(players, h2h_track, h2h_mode):
         JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND rr.player_name = tr.player_name 
         JOIN points_mapping pm ON rr.placement = pm.placement 
         WHERE r.tournament_id IN ({subquery_shared}) 
-        AND rr.player_name IN ({h2h_placeholders}) 
-        {track_condition} 
-        {h2h_kario_cond};
+        AND rr.player_name IN ({h2h_placeholders})
+        {event_cond} 
+        {track_cond} 
+        {mode_cond};
     """
     params_r = list(players) + [len(players)] + list(players)
-    if h2h_track != "Alle Strecken":
-        params_r.append(h2h_track)
+    if event_filter != "Alle Events":
+        params_r.append(event_filter)
+    if track_filter != "Alle Strecken":
+        params_r.append(track_filter)
     df_r = pd.read_sql_query(query_h2h_r, conn, params=params_r)
 
     query_h2h_t = f"""
@@ -341,15 +397,26 @@ def get_h2h_data(players, h2h_track, h2h_mode):
         FROM tournament_results tr 
         WHERE tr.tournament_id IN ({subquery_shared}) 
         AND tr.player_name IN ({h2h_placeholders}) 
-        {h2h_kario_cond};
+        {event_cond} 
+        {mode_cond};
     """
     params_t = list(players) + [len(players)] + list(players)
+    if event_filter != "Alle Events":
+        params_t.append(event_filter)
     df_t = pd.read_sql_query(query_h2h_t, conn, params=params_t)
 
     return df_r, df_t
 
 @st.cache_data
 def get_tournament_edit_data(tournament_id):
+    df_event = pd.read_sql_query("""
+        SELECT event_name 
+        FROM tournament_results 
+        WHERE tournament_id = %s 
+        LIMIT 1;
+    """, conn, params=(tournament_id,))
+    event_name = df_event["event_name"].iloc[0]
+
     df_placements = pd.read_sql_query("""
         SELECT 
             player_name, 
@@ -393,7 +460,7 @@ def get_tournament_edit_data(tournament_id):
         WHERE tournament_id = %s;
     """, conn, params=(tournament_id,))
 
-    return df_placements, df_points, df_beer, num_races, df_race_list
+    return event_name, df_placements, df_points, df_beer, num_races, df_race_list
 
 @st.cache_data
 def get_race_edit_data(race_id):
@@ -446,7 +513,7 @@ st.markdown(
     f"""
         <style>
             div[data-testid="stMainBlockContainer"], .block-container {{
-                padding-top: {st.secrets["custom_theme"]["padding_top"]} !important; /* Wert nach Wunsch verringern (z.B. 0.5rem) */
+                padding-top: {st.secrets["custom_theme"]["padding_top"]}
             }}
             /* Force parent flex wrapper to span the full width */
             div[data-testid="stTabs"] > div[data-orientation="horizontal"] {{
@@ -466,8 +533,8 @@ st.markdown(
         
             /* Increase font/icon size */
             div[data-testid="stTabs"] div[role="tab"] p {{
-                font-size: {st.secrets["custom_theme"]["font_size"]} !important;
-                font-weight: {st.secrets["custom_theme"]["font_weight"]} !important; 
+                font-size: {st.secrets["custom_theme"]["header_font_size"]} !important;
+                font-weight: {st.secrets["custom_theme"]["bold_font_weight"]} !important; 
             }}
         </style>
     """,
@@ -511,9 +578,9 @@ with st.sidebar:
             st.session_state.master = False
             st.rerun()
 
-
 df_players = get_df_players()
 df_tracks = get_df_tracks()
+df_events = get_df_events()
 
 
 # ==========================================
@@ -527,15 +594,17 @@ with tab1:
         # Tournament setup
         if not st.session_state.tournament_active and not st.session_state.waiting_for_placement:
             header("Setup")
-            st.write("")
 
             st.write("**Spieler:**")
             selected_names = st.multiselect("Spieler", df_players["name"].tolist(), key="players_tab1", default=["Pfeiffer", "Markus"] if len(df_players) >= 2 else [], label_visibility="collapsed")
 
+            st.write("**Event:**")
+            selected_event = st.selectbox("Event", ["Kein Event"] + df_events["name"].tolist(), key="events_tab1", label_visibility="collapsed", index=0, placeholder="")
+
             st.write("**Anzahl Rennen:**")
             num_races = st.number_input("Anzahl Rennen", min_value=1, max_value=48, value=4, step=1, label_visibility="collapsed")
 
-            st.write("**Strecken-Auswahlmodus:**")
+            st.write("**Auswahlmodus:**")
             selection_mode = st.segmented_control("Strecken-Auswahlmodus", options=["Zufällig", "Auswahl"], default="Zufällig", label_visibility="collapsed")
 
             st.write("**Spielmodus:**")
@@ -549,6 +618,7 @@ with tab1:
                     st.error("❌ Ein Turnier erfordert mindestens 2 Spieler!")
                 else:
                     st.session_state.total_races = int(num_races)
+                    st.session_state.event = selected_event if selected_event != "Kein Event" else None
                     st.session_state.current_round = 1
                     st.session_state.selection_mode = selection_mode
                     st.session_state.game_mode = game_mode
@@ -560,7 +630,7 @@ with tab1:
         elif st.session_state.tournament_active and not st.session_state.waiting_for_placement:
 
             header("Rennergebnisse")
-            st.write("")
+
             active_players = st.session_state.active_players
             all_races_valid = True
             first_invalid_race = None
@@ -615,7 +685,7 @@ with tab1:
                     duplicate = False
                     for name in active_players:
                         saved_placement = st.session_state.backup_races.get(f"placement_{race_num}_{name}", None)
-                        val = ui_placement_selection(name, prefix_key=f"r_{race_num}", default_val=saved_placement)
+                        val = placement_selection(name, prefix_key=f"r_{race_num}", default_val=saved_placement)
                         if val in ["two_positions", "missing"]:
                             error = True
                             ui_error = True
@@ -682,14 +752,14 @@ with tab1:
                     st.session_state.backup_races = {}
                     st.session_state.final_check_failed = False
                     st.session_state.tournament_active = False
-                    st.session_state.tournament_id = None
                     st.rerun()
 
         # Finalize tournament
         elif st.session_state.waiting_for_placement:
-            header("Turnierplatzierungen")
-            st.write("")
+            header("Endplatzierungen")
+
             active_players = st.session_state.active_players
+            selected_event = st.session_state.event
             final_placements = {}
             beer_finished = {}
             ui_error = False
@@ -706,7 +776,7 @@ with tab1:
 
             # Tournament placements
             for name in active_players:
-                val = ui_placement_selection(name, prefix_key="fp", custom_title=f"**{name}** ({points_dict[name]} Punkte)**:**")
+                val = placement_selection(name, prefix_key="fp", custom_title=f"**{name}** ({points_dict[name]} Punkte)**:**")
                 if val in ["two_positions", "missing"]:
                     ui_error = True
                 else:
@@ -716,7 +786,7 @@ with tab1:
             if st.session_state.game_mode == "Kario":
                 st.write("---")
                 header("Bier")
-                st.write("")
+
                 for name in active_players:
                     st.write(f"**{name}:**")
                     beer_options = list(range(1, st.session_state.total_races + 1))
@@ -749,12 +819,12 @@ with tab1:
                         # "tournaments" table
                         berlin_tz = ZoneInfo("Europe/Berlin")
                         current_timestamp = datetime.now(tz=berlin_tz).strftime("%Y-%m-%d %H:%M:%S")
-                        tournament_id = cur.execute("""
+                        cur.execute("""
                             INSERT INTO tournaments (date) 
                             VALUES (%s)
                             RETURNING id;
                         """, (current_timestamp,))
-                        st.session_state.tournament_id = cur.fetchone()[0]
+                        tournament_id = cur.fetchone()[0]
 
                         # "races" table
                         for race_num in range(1, st.session_state.total_races + 1):
@@ -764,7 +834,7 @@ with tab1:
                                 INSERT INTO races (tournament_id, track_name, picked_by_name) 
                                 VALUES (%s, %s, %s)
                                 RETURNING id;
-                            """, (st.session_state.tournament_id, saved_track, saved_picker))
+                            """, (tournament_id, saved_track, saved_picker))
                             race_id = cur.fetchone()[0]
 
                             # "race_results" table
@@ -783,15 +853,14 @@ with tab1:
                                 beer_val = None
                                 final_place = 12
                             cur.execute("""
-                                INSERT INTO tournament_results (tournament_id, player_name, final_placement, beer_finished_after, kario) 
-                                VALUES (%s, %s, %s, %s, %s);
-                            """, (st.session_state.tournament_id, player_name, final_place, beer_val, kario_val))
+                                INSERT INTO tournament_results (tournament_id, player_name, final_placement, beer_finished_after, kario, event_name) 
+                                VALUES (%s, %s, %s, %s, %s, %s);
+                            """, (tournament_id, player_name, final_place, beer_val, kario_val, selected_event))
 
                         conn.commit()
                         st.cache_data.clear()
                         st.session_state.backup_races = {}
                         st.session_state.waiting_for_placement = False
-                        st.session_state.tournament_id = None
                         time.sleep(2)
                         st.rerun()
 
@@ -808,7 +877,6 @@ with tab1:
                 # Cancel
                 if st.button("**Abbrechen**"):
                     st.session_state.waiting_for_placement = False
-                    st.session_state.tournament_id = None
                     st.rerun()
 
 # ==========================================
@@ -816,23 +884,74 @@ with tab1:
 # ==========================================
 with tab2:
     header("Verwaltung")
-    st.write("")
-    with st.expander("**Spieler-Datenbank**"):
-        if not st.session_state.authenticated:
-            st.warning("🔒 Melde dich an.")
-        else:
+
+    if not st.session_state.authenticated:
+        st.warning("🔒 Melde dich an.")
+
+    # Normal Login (no delete)
+    elif not st.session_state.master:
+
+        # PLayers
+        with st.expander("**Spieler-Datenbank**"):
+
+            # Add
+            st.write("**Neuer Spieler:**")
+            new_name = st.text_input("Neuer Spieler", label_visibility="collapsed")
+            if st.button("**Hinzufügen**", type="primary", key="add_player"):
+                if new_name.strip():
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("""
+                            INSERT INTO players (name) 
+                            VALUES (%s);
+                        """, (new_name.strip(),))
+                        conn.commit()
+                        get_df_players.clear()
+                        st.success(f"{new_name} hinzugefügt!")
+                        time.sleep(2)
+                        st.rerun()
+                    except psycopg2.IntegrityError:
+                        st.error("❌ Name existiert bereits!")
+
+        # Events
+        with st.expander("**Event-Datenbank**"):
+
+            # Add
+            st.write("**Neues Event:**")
+            new_event = st.text_input("Neues Event", label_visibility="collapsed")
+            if st.button("**Hinzufügen**", type="primary", key="add_event"):
+                if new_event.strip():
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("""
+                            INSERT INTO events (name) 
+                            VALUES (%s);
+                        """, (new_event.strip(),))
+                        conn.commit()
+                        get_df_events.clear()
+                        st.success(f"{new_event} hinzugefügt!")
+                        time.sleep(2)
+                        st.rerun()
+                    except psycopg2.IntegrityError:
+                        st.error("❌ Event existiert bereits!")
+
+    # Master Login
+    else:
+
+        # Players
+        with st.expander("**Spieler-Datenbank**"):
             col_add, col_del = st.columns(2)
 
             # Add
             with col_add:
                 st.write("**Neuer Spieler:**")
                 new_name = st.text_input("Neuer Spieler", label_visibility="collapsed")
-                if st.button("**Hinzufügen**", type="primary"):
+                if st.button("**Hinzufügen**", type="primary", key="add_player_master"):
                     if new_name.strip():
                         try:
                             cur = conn.cursor()
                             cur.execute("""
-                                INSERT INTO players (name) 
+                                INSERT INTO players (name)
                                 VALUES (%s);
                             """, (new_name.strip(),))
                             conn.commit()
@@ -845,103 +964,165 @@ with tab2:
 
             # Delete
             with col_del:
-                if not df_players.empty:
-                    st.write("**Löschen:**")
-                    delete_name = st.selectbox("Löschen", df_players["name"].tolist(), label_visibility="collapsed", index=None, placeholder="")
-                    if st.session_state.get("confirm_delete_player") != delete_name or st.session_state.get("confirm_delete_player") is None:
-                        if st.button("**Löschen**", type="secondary"):
-                            st.session_state.confirm_delete_player = delete_name
+                st.write("**Löschen:**")
+                delete_name = st.selectbox("Löschen", df_players["name"].tolist(), label_visibility="collapsed", index=None, placeholder="")
+                if st.session_state.get("confirm_delete_player") != delete_name or st.session_state.get("confirm_delete_player") is None:
+                    if st.button("**Löschen**", type="secondary", key="del_player_master"):
+                        st.session_state.confirm_delete_player = delete_name
+                        st.rerun()
+                else:
+                    st.error(f"⚠️ **{delete_name}** unwiderruflich löschen?")
+                    c_conf1, c_conf2 = st.columns(2)
+                    with c_conf1:
+                        if st.button("**Löschen**", type="primary", width="stretch"):
+                            cur = conn.cursor()
+                            cur.execute("""
+                                DELETE FROM players
+                                WHERE name = %s;
+                            """, (delete_name,))
+                            conn.commit()
+                            get_df_players.clear()
+                            st.error(f"{delete_name} gelöscht!")
+                            st.session_state.confirm_delete_player = None
+                            time.sleep(2)
                             st.rerun()
-                    else:
-                        st.error(f"⚠️ **{delete_name}** unwiderruflich löschen?")
-                        c_conf1, c_conf2 = st.columns(2)
-                        with c_conf1:
-                            if st.button("**Löschen**", type="primary", width="stretch"):
-                                cur = conn.cursor()
-                                cur.execute("""
-                                    DELETE FROM players 
-                                    WHERE name = %s;
-                                """, (delete_name,))
-                                conn.commit()
-                                get_df_players.clear()
-                                st.error(f"{delete_name} gelöscht!")
-                                st.session_state.confirm_delete_player = None
-                                time.sleep(2)
-                                st.rerun()
-                        with c_conf2:
-                            if st.button("**Abbrechen**", width="stretch"):
-                                st.session_state.confirm_delete_player = None
-                                st.rerun()
+                    with c_conf2:
+                        if st.button("**Abbrechen**", width="stretch"):
+                            st.session_state.confirm_delete_player = None
+                            st.rerun()
+
+        # Events
+        with st.expander("**Event-Datenbank**"):
+            col_add, col_del = st.columns(2)
+
+            # Add
+            with col_add:
+                st.write("**Neues Event:**")
+                new_event = st.text_input("Neues Event", label_visibility="collapsed")
+                if st.button("**Hinzufügen**", type="primary", key="add_event_master"):
+                    if new_event.strip():
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("""
+                                INSERT INTO events (name)
+                                VALUES (%s);
+                            """, (new_event.strip(),))
+                            conn.commit()
+                            get_df_events.clear()
+                            st.success(f"{new_event} hinzugefügt!")
+                            time.sleep(2)
+                            st.rerun()
+                        except psycopg2.IntegrityError:
+                            st.error("❌ Event existiert bereits!")
+
+            # Delete
+            with col_del:
+                st.write("**Löschen:**")
+                delete_event = st.selectbox("Löschen", df_events["name"].tolist(), label_visibility="collapsed", index=None, placeholder="")
+                if st.session_state.get("confirm_delete_event") != delete_event or st.session_state.get("confirm_delete_event") is None:
+                    if st.button("**Löschen**", type="secondary", key="del_event_master"):
+                        st.session_state.confirm_delete_event = delete_event
+                        st.rerun()
+                else:
+                    st.error(f"⚠️ **{delete_event}** unwiderruflich löschen?")
+                    c_conf1, c_conf2 = st.columns(2)
+                    with c_conf1:
+                        if st.button("**Löschen**", type="primary", width="stretch"):
+                            cur = conn.cursor()
+                            cur.execute("""
+                                DELETE FROM events
+                                WHERE name = %s;
+                            """, (delete_event,))
+                            conn.commit()
+                            get_df_events.clear()
+                            st.error(f"{delete_event} gelöscht!")
+                            st.session_state.confirm_delete_event = None
+                            time.sleep(2)
+                            st.rerun()
+                    with c_conf2:
+                        if st.button("**Abbrechen**", width="stretch"):
+                            st.session_state.confirm_delete_event = None
+                            st.rerun()
 
     st.divider()
 
     # Player stats
-    header("Spieler-Statistiken")
-    st.write("")
+    header("Filter")
     if not df_players.empty:
+        # st.write("**Spieler:**")
         st.write("**Spieler:**")
         profile_name = st.selectbox("Spieler", df_players["name"].tolist(), label_visibility="collapsed")
 
-        # Filter game mode
-        t2_mode = st.segmented_control("Statistiken filtern", options=["Gesamt", "Kario", "Mario"], default="Gesamt", key="t2_mode", label_visibility="collapsed")
+        # Filter event
+        st.write("**Event:**")
+        event_filter = st.selectbox("Event", ["Alle Events"] + df_events["name"].tolist(), key="event_filter_tab2", label_visibility="collapsed", index=0, placeholder="")
 
-        # Filter conditions
-        kario_cond = ""
-        kario_cond_tr2 = ""
-        if t2_mode == "Kario":
-            kario_cond = " AND tr.kario = 1"
-            kario_cond_tr2 = " AND tr2.kario = 1"
-        elif t2_mode == "Mario":
-            kario_cond = " AND tr.kario = 0"
-            kario_cond_tr2 = " AND tr2.kario = 0"
+        # Filter track
+        st.write("**Strecke:**")
+        track_filter = st.selectbox("Strecke", ["Alle Strecken"] + df_tracks["name"].tolist(), key="track_filter_tab2", label_visibility="collapsed", index=0, placeholder="")
+
+        # Filter game mode
+        st.write("**Spielmodus:**")
+        mode_filter = st.segmented_control("Modus", options=["Gesamt", "Kario", "Mario"], default="Gesamt", key="mode_filter_tab2", label_visibility="collapsed")
 
         # Race metrics
-        df_races, df_tournaments, df_best, df_fav = get_player_stats(profile_name, kario_cond, kario_cond_tr2)
+        df_races, df_tournaments, df_best, df_fav = get_player_stats(profile_name, event_filter, mode_filter, track_filter)
 
-        # Formatting
-        st.markdown("""
-            <style>
-                [data-testid="stMetricLabel"], 
-                [data-testid="stMetricLabel"] * {
-                    white-space: pre-wrap !important;
-                }
-            </style>
-        """, unsafe_allow_html=True)
+        st.divider()
 
+        header("Spieler-Statistiken")
         if pd.notnull(df_races["total_races"]) and df_races["total_races"] > 0:
             total_pts = df_races["total_points"] or 0
             total_races = df_races["total_races"] or 1
             normalized_points = (total_pts / total_races) * 4
 
             # Metrics display
+            st.write("**Metriken:**")
+            st.html(f"""<style>
+                    /* Label */
+                    [data-testid="stMetricLabel"] p {{
+                        font-size: {st.secrets["custom_theme"]["base_font_size"]} !important;
+                        font-weight: {st.secrets["custom_theme"]["semibold_font_weight"]} !important;
+                        white-space: pre-line !important;
+                        word-break: break-word !important;
+                    }}
+                    /* Metric value */
+                    [data-testid="stMetricValue"] {{
+                        font-size: {st.secrets["custom_theme"]["metrics_font_size"]} !important;
+                        font-weight: {st.secrets["custom_theme"]["metrics_font_weight"]} !important;
+                    }}
+                </style>
+                """, unsafe_allow_javascript=True)
             m_col1, m_col2, m_col3, m_col4 = st.columns(4)
             with m_col1:
-                st.metric("**Ø-Platz Rennen**", f"{df_races['avg_race_placement']:.2f}")
-                st.metric("**Ø-Platz Rennen\n(w.s.g.)**", f"{df_races['avg_race_placement_picked']:.2f}" if pd.notnull(df_races['avg_race_placement_picked']) else "N/A")
-                st.metric("**Ø-Platz Turnier**", f"{df_tournaments['avg_tournament_placement']:.2f}" if pd.notnull(df_tournaments['avg_tournament_placement']) else "N/A")
+                st.metric("Ø-Platz Rennen", f"{df_races['avg_race_placement']:.2f}")
+                if track_filter == "Alle Strecken":
+                    st.metric("Ø-Platz Rennen\n(w.s.g.)", f"{df_races['avg_race_placement_picked']:.2f}" if pd.notnull(df_races['avg_race_placement_picked']) else "N/A")
+                    st.metric("Ø-Platz Turnier", f"{df_tournaments['avg_tournament_placement']:.2f}" if pd.notnull(df_tournaments['avg_tournament_placement']) else "N/A")
             with m_col2:
-                st.metric("**Ø-Punkte / Rennen**", f"{df_races['avg_race_points']:.2f}")
-                st.metric("**Ø-Punkte / Turnier\n(4 R.)**", f"{normalized_points:.2f}")
-                st.metric("**Ø-Rennen / Bier**", f"{df_tournaments['avg_beer_finished_after']:.2f}" if pd.notnull(df_tournaments['avg_beer_finished_after']) else "N/A")
+                st.metric("Ø-Punkte / Rennen", f"{df_races['avg_race_points']:.2f}")
+                if track_filter == "Alle Strecken":
+                    st.metric("Ø-Punkte / Turnier\n(4 R.)", f"{normalized_points:.2f}")
+                    if mode_filter != "Mario":
+                        st.metric("Ø-Rennen / Bier", f"{df_tournaments['avg_beer_finished_after']:.2f}" if pd.notnull(df_tournaments['avg_beer_finished_after']) else "N/A")
             with m_col3:
-                st.metric("**Rennsiege**", f"{int(df_races['race_wins'] or 0)}")
-                st.metric("**Turniersiege**", f"{int(df_tournaments['tournament_wins'] or 0)}")
+                st.metric("Rennsiege", f"{int(df_races['race_wins'] or 0)}")
+                if track_filter == "Alle Strecken":
+                    st.metric("Turniersiege", f"{int(df_tournaments['tournament_wins'] or 0)}")
             with m_col4:
-                st.metric("**Rennen**", f"{int(total_races)}")
-                st.metric("**Turniere**", f"{int(df_tournaments['total_tournaments'] or 0)}")
+                st.metric("Rennen", f"{int(total_races)}")
+                if track_filter == "Alle Strecken":
+                    st.metric("Turniere", f"{int(df_tournaments['total_tournaments'] or 0)}")
 
-            st.divider()
-
-            # Ranking display
-            header("Ranglisten")
-            st.write("")
-            t_col1, t_col2 = st.columns(2)
-            with t_col1:
-                st.write("**🔝 Beste Strecken**")
-                st.dataframe(df_best, hide_index=True, width="stretch")
-            with t_col2:
-                st.write("**❤️ Lieblingsstrecken**")
-                st.dataframe(df_fav, hide_index=True, width="stretch")
+            if track_filter == "Alle Strecken":
+                st.write("**Ranglisten:**")
+                t_col1, t_col2 = st.columns(2)
+                with t_col1:
+                    semibold("🔝 Beste Strecken")
+                    st.dataframe(df_best, hide_index=True, width="stretch")
+                with t_col2:
+                    semibold("❤️ Lieblingsstrecken")
+                    st.dataframe(df_fav, hide_index=True, width="stretch")
         else:
             st.info("Keine Statistiken für diesen Spieler vorhanden.")
 
@@ -949,82 +1130,96 @@ with tab2:
 # TAB 3: TRACK DATABASE
 # ==========================================
 with tab3:
-    header("Strecken-Statistiken")
-    st.write("")
+    header("Filter")
+
     st.write("**Strecke:**")
     selected_track = st.selectbox("Strecke", df_tracks["name"].tolist(), label_visibility="collapsed")
-    df_play_count, df_most_picked, df_placement, df_points, df_wins = get_track_stats(selected_track)
 
+    st.divider()
+
+    header("Strecken-Statistiken")
+    df_play_count, df_most_picked, df_placement, df_points, df_wins = get_track_stats(selected_track)
     st.write(f"**Gespielt:** {df_play_count['count'].values[0]}x")
 
     if df_play_count['count'].values[0] > 0:
+        st.write(f"**Gewählt:**")
         st.dataframe(df_most_picked, hide_index=True, width="stretch")
-
-        st.write("---")
-
-        header("Ranglisten")
-        st.write("")
+        st.write("**Ranglisten:**")
         rl1, rl2, rl3 = st.columns(3)
         with rl1:
-            st.write("**Nach Ø-Platz**")
+            semibold("Nach Ø-Platz")
             st.dataframe(df_placement, hide_index=True, width="stretch")
         with rl2:
-            st.write("**Nach Ø-Punkten**")
+            semibold("Nach Ø-Punkten")
             st.dataframe(df_points, hide_index=True, width="stretch")
         with rl3:
-            st.write("**Nach Anzahl Siegen**")
+            semibold("Nach Anzahl Siegen")
             st.dataframe(df_wins, hide_index=True, width="stretch")
 
 # ==========================================
 # TAB 4: HEAD-TO-HEAD
 # ==========================================
 with tab4:
-    header("Vergleich")
-    st.write("")
+    header("Filter")
     st.write("**Spieler:**")
     rivals = st.multiselect("Spieler", df_players["name"].tolist(), key="players_tab4", default=["Pfeiffer", "Markus"] if len(df_players) >= 2 else [], label_visibility="collapsed")
 
+    # Filter event
+    st.write("**Event:**")
+    event_filter = st.selectbox("Event", ["Alle Events"] + df_events["name"].tolist(), key="event_filter_tab4", label_visibility="collapsed", index=0, placeholder="")
+
+    # Filter track
+    st.write("**Strecke:**")
+    track_filter = st.selectbox("Strecke", ["Alle Strecken"] + df_tracks["name"].tolist(), key="track_filter_tab4", label_visibility="collapsed", index=0, placeholder="")
+
+    # Filter game mode
+    st.write("**Spielmodus:**")
+    mode_filter = st.segmented_control("Modus", options=["Gesamt", "Kario", "Mario"], default="Gesamt", key="mode_filter_tab4", label_visibility="collapsed")
+
+    st.divider()
+
+    header("Vergleich")
+
     if len(rivals) >= 2:
-        h2h_placeholders = ",".join(["%s"] * len(rivals))
-
-        st.write("**Filterung nach Strecke:**")
-        h2h_track = st.selectbox("Filterung nach Strecke", ["Alle Strecken"] + df_tracks["name"].tolist(), label_visibility="collapsed")
-
-        # Filter game mode
-        h2h_mode = st.segmented_control("Modus filtern", options=["Gesamt", "Kario", "Mario"], default="Gesamt", key="h2h_mode", label_visibility="collapsed")
-
-        df_h2h_r, df_h2h_t = get_h2h_data(tuple(rivals), h2h_track, h2h_mode)
+        df_h2h_r, df_h2h_t = get_h2h_data(tuple(rivals), event_filter, track_filter, mode_filter)
 
         if not df_h2h_r.empty:
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write("**Rennsiege**")
-                st.bar_chart(df_h2h_r.groupby("player")["race_win"].sum().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
-                st.write("**Ø-Platz Rennen ↓**")
-                st.bar_chart(df_h2h_r.groupby("player")["placement"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
-                st.write("**Ø-Punkte / Rennen**")
-                st.bar_chart(df_h2h_r.groupby("player")["points"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
+            if track_filter == "Alle Strecken":
+                c1, c2 = st.columns(2)
+                with c1:
+                    semibold("Rennsiege")
+                    st.bar_chart(df_h2h_r.groupby("player")["race_win"].sum().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
+                    semibold("Ø-Platz Rennen ↓")
+                    st.bar_chart(df_h2h_r.groupby("player")["placement"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
+                    semibold("Ø-Punkte / Rennen")
+                    st.bar_chart(df_h2h_r.groupby("player")["points"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
 
-            with c2:
-                if h2h_track == "Alle Strecken":
+                with c2:
                     if not df_h2h_t.empty:
-                        st.write("**Turniersiege**")
-                        st.bar_chart(df_h2h_t.groupby("player")["tournament_win"].sum().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
-                        st.write("**Ø-Platz Turnier ↓**")
-                        st.bar_chart(df_h2h_t.groupby("player")["final_placement"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
-                        st.write("**Ø-Punkte / Turnier**")
-                        st.bar_chart(df_h2h_t.groupby("player")["tournament_points"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["color"])
-                else:
-                    st.info("Turnier-Statistiken bei Streckenfilter ausgeblendet.")
+                        semibold("Turniersiege")
+                        st.bar_chart(df_h2h_t.groupby("player")["tournament_win"].sum().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
+                        semibold("Ø-Platz Turnier ↓")
+                        st.bar_chart(df_h2h_t.groupby("player")["final_placement"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
+                        semibold("Ø-Punkte / Turnier")
+                        st.bar_chart(df_h2h_t.groupby("player")["tournament_points"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
+            else:
+                semibold("Rennsiege")
+                st.bar_chart(df_h2h_r.groupby("player")["race_win"].sum().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
+                semibold("Ø-Platz Rennen ↓")
+                st.bar_chart(df_h2h_r.groupby("player")["placement"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
+                semibold("Ø-Punkte / Rennen")
+                st.bar_chart(df_h2h_r.groupby("player")["points"].mean().reset_index().set_index("player"), color=st.secrets["custom_theme"]["highlight_color"])
+
         else:
             st.info("Keine Statistiken für diese Spieler vorhanden.")
+    else:
+        st.info("Mindestens 2 Spieler wählen.")
 
 # ==========================================
 # TAB 5: HISTORY & EDITING
 # ==========================================
 with tab5:
     header("Turnierverlauf")
-    st.write("")
 
     df_history = get_history_list()
 
@@ -1036,7 +1231,6 @@ with tab5:
         st.divider()
 
         header("Turnier-Nr.")
-        st.write("")
 
         num_to_id = dict(zip(df_history["Turnier-Nr."], df_history["Turnier-ID"]))
         selected_tournament_num = st.selectbox("Turnier zum Bearbeiten", df_history['Turnier-Nr.'].tolist(),key="select_edit_id",label_visibility="collapsed")
@@ -1047,17 +1241,17 @@ with tab5:
         if selected_tournament_id:
             disable_edit = False if st.session_state.master else True
 
+            event_name, df_current_placements, df_current_points, df_current_beer, num_races_in_tournament, df_race_list = get_tournament_edit_data(selected_tournament_id)
+            current_points_dict = dict(zip(df_current_points["player_name"], df_current_points["total_points"]))
+
             # Tournament placements
             header("Endergebnisse")
-            st.write("")
-            df_current_placements, df_current_points, df_current_beer, num_races_in_tournament, df_race_list = get_tournament_edit_data(selected_tournament_id)
-            current_points_dict = dict(zip(df_current_points["player_name"], df_current_points["total_points"]))
 
             edited_final_placements = {}
             ui_error_fp = False
 
             for _, row in df_current_placements.iterrows():
-                val = ui_placement_selection(row['player_name'], prefix_key=f"edit_fp_{selected_tournament_id}", custom_title=f"**{row['player_name']}** ({current_points_dict.get(row['player_name'], 0)} Punkte)**:**", default_val=int(row['final_placement']))
+                val = placement_selection(row['player_name'], prefix_key=f"edit_fp_{selected_tournament_id}", custom_title=f"**{row['player_name']}** ({current_points_dict.get(row['player_name'], 0)} Punkte)**:**", default_val=int(row['final_placement']))
                 if val in ["two_positions", "missing"]:
                     ui_error_fp = True
                 else:
@@ -1089,7 +1283,7 @@ with tab5:
             if kario:
                 st.divider()
                 header("Bier")
-                st.write("")
+
 
                 beer_options = list(range(1, num_races_in_tournament + 1))
                 beer_options.append("❌")
@@ -1152,7 +1346,7 @@ with tab5:
 
             # Races
             header("Rennergebnisse")
-            st.write("")
+
 
             for idx, r_row in df_race_list.iterrows():
                 race_id = int(r_row['race_id'])
@@ -1176,7 +1370,7 @@ with tab5:
                     has_duplicate_race = False
 
                     for _, p_row in df_race_placements.iterrows():
-                        val = ui_placement_selection(p_row['player_name'], prefix_key=f"edit_r_{race_id}", default_val=int(p_row['placement']))
+                        val = placement_selection(p_row['player_name'], prefix_key=f"edit_r_{race_id}", default_val=int(p_row['placement']))
 
                         if val in ["two_positions", "missing"]:
                             ui_race_error = True
