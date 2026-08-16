@@ -65,6 +65,55 @@ if "confirm_delete_tournament" not in st.session_state:
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
+def header(text, font_size=st.secrets["custom_theme"]["header_font_size"], font_weight=st.secrets["custom_theme"]["bold_font_weight"], font_color=st.secrets["custom_theme"]["font_color"], border=st.secrets["custom_theme"]["border"], highlight_color=st.secrets["custom_theme"]["highlight_color"], padding_left=st.secrets["custom_theme"]["padding_left"], padding_bottom=st.secrets["custom_theme"]["padding_bottom"]):
+    st.html(
+        f"""
+            <p style="
+                font-size: {font_size}; 
+                font-weight: {font_weight}; 
+                line-height: 1.5; 
+                color: {font_color}; 
+                border-left: {border} solid {highlight_color}; 
+                padding-left: {padding_left}; margin: 10px 0;
+                margin-bottom: {padding_bottom};
+            ">
+                {text}
+            </p>
+        """,
+        unsafe_allow_javascript=True
+    )
+
+def semibold(text, font_size=st.secrets["custom_theme"]["base_font_size"], font_weight=st.secrets["custom_theme"]["semibold_font_weight"], font_color=st.secrets["custom_theme"]["font_color"], padding_bottom=st.secrets["custom_theme"]["padding_bottom"]):
+    st.html(
+        f"""
+            <p style="
+                font-size: {font_size}; 
+                font-weight: {font_weight}; 
+                color: {font_color}; 
+                margin-bottom: {padding_bottom};
+            ">
+                {text}
+            </p>
+        """,
+        unsafe_allow_javascript=True
+    )
+
+def prevent_accidental_reload():
+    st.iframe(
+        """
+        <script>
+            const main_window = window.parent.document.defaultView;
+            main_window.addEventListener('beforeunload', function (event) {
+                event.preventDefault();
+                event.returnValue = ''; 
+                return '';
+            });
+        </script>
+        """,
+        height="content",
+        width="stretch",
+    )
+
 def has_duplicates(lst):
     """Checks for duplicates in a list."""
     return len(lst) != len(set(lst))
@@ -87,46 +136,10 @@ def placement_selection(name, prefix_key, default_val=None, custom_title=None, d
 
     return place1 if place1 is not None else place2
 
-def semibold(text, font_size=st.secrets["custom_theme"]["base_font_size"], font_weight=st.secrets["custom_theme"]["semibold_font_weight"], font_color=st.secrets["custom_theme"]["font_color"], padding_bottom=st.secrets["custom_theme"]["padding_bottom"]):
-    st.html(
-        f"""
-            <p style="
-                font-size: {font_size}; 
-                font-weight: {font_weight}; 
-                color: {font_color}; 
-                margin-bottom: {padding_bottom};
-            ">
-                {text}
-            </p>
-        """,
-        unsafe_allow_javascript=True
-)
-
-def header(text, font_size=st.secrets["custom_theme"]["header_font_size"], font_weight=st.secrets["custom_theme"]["bold_font_weight"], font_color=st.secrets["custom_theme"]["font_color"], border=st.secrets["custom_theme"]["border"], highlight_color=st.secrets["custom_theme"]["highlight_color"], padding_left=st.secrets["custom_theme"]["padding_left"], padding_bottom=st.secrets["custom_theme"]["padding_bottom"]):
-    st.html(
-        f"""
-            <p style="
-                font-size: {font_size}; 
-                font-weight: {font_weight}; 
-                line-height: 1.5; 
-                color: {font_color}; 
-                border-left: {border} solid {highlight_color}; 
-                padding-left: {padding_left}; margin: 10px 0;
-                margin-bottom: {padding_bottom};
-            ">
-                {text}
-            </p>
-        """,
-        unsafe_allow_javascript=True
-)
 
 # ==========================================
-# 4. CACHED FUNCTIONS
+# 4. CACHED SQL FUNCTIONS
 # ==========================================
-@st.cache_data
-def get_points_mapping_count():
-    return pd.read_sql_query("SELECT COUNT(*) FROM points_mapping;", conn)["count"][0]
-
 @st.cache_data
 def get_points_mapping():
     df = pd.read_sql_query("SELECT * FROM points_mapping;", conn)
@@ -158,10 +171,12 @@ def get_df_h2h_track(track_name, players):
         AND r.id IN (
             SELECT race_id FROM race_results 
             WHERE player_name IN ({placeholders}) 
-            GROUP BY race_id HAVING COUNT(DISTINCT player_name) = %s
+            GROUP BY race_id 
+            HAVING COUNT(DISTINCT player_name) = %s
         ) 
         AND rr.player_name IN ({placeholders}) 
-        GROUP BY rr.player_name ORDER BY AVG(rr.placement) ASC;
+        GROUP BY rr.player_name 
+        ORDER BY AVG(rr.placement) ASC;
     """
     params = [track_name] + list(players) + [len(players)] + list(players)
     df = pd.read_sql_query(query, conn, params=params)
@@ -185,36 +200,21 @@ def get_df_avg_track(track_name, players):
         JOIN races r ON rr.race_id = r.id 
         WHERE r.track_name = %s 
         AND rr.player_name IN ({placeholders}) 
-        GROUP BY rr.player_name ORDER BY AVG(rr.placement) ASC;
+        GROUP BY rr.player_name 
+        ORDER BY AVG(rr.placement) ASC;
     """
     params = [track_name] + list(players)
     return pd.read_sql_query(query, conn, params=params)
 
 @st.cache_data
 def get_player_stats(profile_name, event_filter, mode_filter, track_filter):
+
     # Filter conditions
-    filter_cond = ""
-    filter_cond_2 = ""
-    if mode_filter == "Kario":
-        filter_cond += " AND tr.kario = 1"
-        filter_cond_2 += " AND tr2.kario = 1"
-    elif mode_filter == "Mario":
-        filter_cond += " AND tr.kario = 0"
-        filter_cond_2 += " AND tr2.kario = 0"
-    if event_filter != "Alle Events":
-        filter_cond += " AND tr.event_name = %s"
-        filter_cond_2 += " AND tr2.event_name = %s"
-    if track_filter != "Alle Strecken":
-        filter_cond += " AND r.track_name = %s"
-        
-    # Params
-    params = [profile_name]
-    params_2=[profile_name, profile_name]
-    if event_filter != "Alle Events":
-        params += [event_filter]
-        params_2 = [profile_name, event_filter, profile_name, event_filter]
-    if track_filter != "Alle Strecken":
-        params += [track_filter]
+    event_cond = " AND tr.event_name = %s" if event_filter != "Alle Events" else ""
+    event_cond_2 = " AND tr2.event_name = %s" if event_filter != "Alle Events" else ""
+    track_cond = " AND r.track_name = %s" if track_filter != "Alle Strecken" else ""
+    mode_cond = " AND tr.kario = 1" if mode_filter == "Kario" else (" AND tr.kario = 0" if mode_filter == "Mario" else "")
+    mode_cond_2 = " AND tr2.kario = 1" if mode_filter == "Kario" else (" AND tr2.kario = 0" if mode_filter == "Mario" else "")
 
     query_races = f"""
         SELECT 
@@ -229,62 +229,107 @@ def get_player_stats(profile_name, event_filter, mode_filter, track_filter):
         JOIN races r ON rr.race_id = r.id 
         JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND rr.player_name = tr.player_name 
         WHERE rr.player_name = %s 
-        {filter_cond};
+        {event_cond}
+        {track_cond}
+        {mode_cond};
     """
-    df_races = pd.read_sql_query(query_races, conn, params=params).iloc[0]
+    params_races = [profile_name]
+    if event_filter != "Alle Events":
+        params_races += [event_filter]
+    if track_filter != "Alle Strecken":
+        params_races += [track_filter]
+    df_races = pd.read_sql_query(query_races, conn, params=params_races).iloc[0]
 
-    df_tournaments = None
-    df_best = None
-    df_fav = None
-    if track_filter == "Alle Strecken":
-        query_tournaments = f"""
+    query_normalized = f"""
+        WITH tournament_stats AS (
             SELECT 
-                COUNT(DISTINCT tr.tournament_id) as total_tournaments,
-                AVG(tr.final_placement) as avg_tournament_placement,
-                SUM(CASE WHEN tr.final_placement = 1 THEN 1 ELSE 0 END) as tournament_wins,
-                AVG(tr.beer_finished_after) as avg_beer_finished_after
-            FROM tournament_results tr 
-            WHERE tr.player_name = %s 
-            {filter_cond};
-        """
-        df_tournaments = pd.read_sql_query(query_tournaments, conn, params=params).iloc[0]
-
-        query_best = f"""
-            SELECT 
-                r.track_name as "Strecke", 
-                COUNT(rr.id) as "Gefahren", 
-                ROUND(AVG(rr.placement), 2) as "Ø-Platz" 
+                r.tournament_id,
+                SUM(pm.points) AS t_points,
+                COUNT(rr.id) AS t_races
             FROM race_results rr 
+            JOIN points_mapping pm ON rr.placement = pm.placement 
             JOIN races r ON rr.race_id = r.id 
             JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND rr.player_name = tr.player_name 
             WHERE rr.player_name = %s 
-            {filter_cond} 
-            GROUP BY r.track_name ORDER BY AVG(rr.placement) ASC LIMIT 5;
-        """
-        df_best = pd.read_sql_query(query_best, conn, params=params)
+            {event_cond}
+            {track_cond}
+            {mode_cond}
+            GROUP BY r.tournament_id
+        )
+        SELECT AVG((t_points::NUMERIC / t_races) * 4) AS avg_normalized_points
+        FROM tournament_stats;
+    """
+    params_normalized = [profile_name]
+    if event_filter != "Alle Events":
+        params_normalized += [event_filter]
+    if track_filter != "Alle Strecken":
+        params_normalized += [track_filter]
+    df_normalized = pd.read_sql_query(query_normalized, conn, params=params_normalized)
+    avg_normalized_points = df_normalized["avg_normalized_points"].iloc[0]
 
-        query_favorites = f"""
-            SELECT 
-                r.track_name as "Strecke", 
-                COUNT(r.id) as "Gewählt", 
-                ROUND((
-                    SELECT AVG(rr2.placement) 
-                    FROM race_results rr2 
-                    JOIN races r2 ON rr2.race_id = r2.id 
-                    JOIN tournament_results tr2 ON r2.tournament_id = tr2.tournament_id AND rr2.player_name = tr2.player_name 
-                    WHERE r2.track_name = r.track_name 
-                    AND rr2.player_name = %s 
-                    {filter_cond_2}
-                ), 2) as "Ø-Platz" 
-            FROM races r 
-            JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND tr.player_name = r.picked_by_name 
-            WHERE r.picked_by_name = %s 
-            {filter_cond} 
-            GROUP BY r.track_name ORDER BY COUNT(r.id) DESC, r.track_name ASC LIMIT 5;
-        """
-        df_fav = pd.read_sql_query(query_favorites, conn, params=params_2)
+    query_tournaments = f"""
+        SELECT 
+            COUNT(DISTINCT tr.tournament_id) as total_tournaments,
+            AVG(tr.final_placement) as avg_tournament_placement,
+            SUM(CASE WHEN tr.final_placement = 1 THEN 1 ELSE 0 END) as tournament_wins,
+            AVG(tr.beer_finished_after) as avg_beer_finished_after
+        FROM tournament_results tr 
+        WHERE tr.player_name = %s 
+        {event_cond}
+        {mode_cond};
+    """
+    params_tournaments = [profile_name]
+    if event_filter != "Alle Events":
+        params_tournaments += [event_filter]
+    df_tournaments = pd.read_sql_query(query_tournaments, conn, params=params_tournaments).iloc[0]
 
-    return df_races, df_tournaments, df_best, df_fav
+    query_best = f"""
+        SELECT 
+            r.track_name as "Strecke", 
+            COUNT(rr.id) as "Gefahren", 
+            ROUND(AVG(rr.placement), 2) as "Ø-Platz" 
+        FROM race_results rr 
+        JOIN races r ON rr.race_id = r.id 
+        JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND rr.player_name = tr.player_name 
+        WHERE rr.player_name = %s 
+        {event_cond}
+        {mode_cond} 
+        GROUP BY r.track_name 
+        ORDER BY AVG(rr.placement) ASC LIMIT {st.secrets["custom_theme"]["ranking_limit"]};
+    """
+    params_best = [profile_name]
+    if event_filter != "Alle Events":
+        params_best += [event_filter]
+    df_best = pd.read_sql_query(query_best, conn, params=params_best)
+
+    query_favorites = f"""
+        SELECT 
+            r.track_name as "Strecke", 
+            COUNT(r.id) as "Gewählt", 
+            ROUND((
+                SELECT AVG(rr2.placement) 
+                FROM race_results rr2 
+                JOIN races r2 ON rr2.race_id = r2.id 
+                JOIN tournament_results tr2 ON r2.tournament_id = tr2.tournament_id AND rr2.player_name = tr2.player_name 
+                WHERE r2.track_name = r.track_name 
+                AND rr2.player_name = %s 
+                {event_cond_2}
+                {mode_cond_2}
+            ), 2) as "Ø-Platz" 
+        FROM races r 
+        JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND tr.player_name = r.picked_by_name 
+        WHERE r.picked_by_name = %s 
+        {event_cond}
+        {mode_cond} 
+        GROUP BY r.track_name 
+        ORDER BY COUNT(r.id) DESC, r.track_name ASC LIMIT {st.secrets["custom_theme"]["ranking_limit"]};
+    """
+    params_fav = [profile_name, profile_name]
+    if event_filter != "Alle Events":
+        params_fav = [profile_name, event_filter, profile_name, event_filter]
+    df_fav = pd.read_sql_query(query_favorites, conn, params=params_fav)
+
+    return df_races, avg_normalized_points, df_tournaments, df_best, df_fav
 
 @st.cache_data
 def get_track_stats(selected_track):
@@ -293,7 +338,7 @@ def get_track_stats(selected_track):
         FROM races 
         WHERE track_name = %s;
     """
-    df_play_count = pd.read_sql_query(query_play_count, conn, params=(selected_track,))
+    play_count = pd.read_sql_query(query_play_count, conn, params=[selected_track])['count'].values[0]
 
     query_most_picked = f"""
         SELECT 
@@ -302,9 +347,10 @@ def get_track_stats(selected_track):
         FROM races 
         WHERE track_name = %s 
         AND picked_by_name IS NOT NULL 
-        GROUP BY "Spieler" ORDER BY "Gewählt" DESC LIMIT 5;
+        GROUP BY "Spieler" 
+        ORDER BY "Gewählt" DESC LIMIT {st.secrets["custom_theme"]["ranking_limit"]};
     """
-    df_most_picked = pd.read_sql_query(query_most_picked, conn, params=(selected_track,))
+    df_most_picked = pd.read_sql_query(query_most_picked, conn, params=[selected_track])
 
     query_placement = f"""
         SELECT 
@@ -313,9 +359,10 @@ def get_track_stats(selected_track):
         FROM race_results rr 
         JOIN races r ON rr.race_id = r.id 
         WHERE r.track_name = %s 
-        GROUP BY player_name ORDER BY "Ø-Platz" ASC;
+        GROUP BY player_name 
+        ORDER BY "Ø-Platz" ASC;
     """
-    df_placement = pd.read_sql_query(query_placement, conn, params=(selected_track,))
+    df_placement = pd.read_sql_query(query_placement, conn, params=[selected_track])
 
     query_points = f"""
         SELECT 
@@ -325,9 +372,10 @@ def get_track_stats(selected_track):
         JOIN races r ON rr.race_id = r.id 
         JOIN points_mapping pm ON rr.placement = pm.placement 
         WHERE r.track_name = %s 
-        GROUP BY player_name ORDER BY "Ø-Punkte" DESC;
+        GROUP BY player_name 
+        ORDER BY "Ø-Punkte" DESC;
     """
-    df_points = pd.read_sql_query(query_points, conn, params=(selected_track,))
+    df_points = pd.read_sql_query(query_points, conn, params=[selected_track])
 
     query_wins = f"""
         SELECT 
@@ -337,15 +385,18 @@ def get_track_stats(selected_track):
         JOIN races r ON rr.race_id = r.id 
         WHERE r.track_name = %s 
         AND rr.placement = 1 
-        GROUP BY player_name ORDER BY "Rennsiege" DESC;
+        GROUP BY player_name 
+        ORDER BY "Rennsiege" DESC;
     """
-    df_wins = pd.read_sql_query(query_wins, conn, params=(selected_track,))
+    df_wins = pd.read_sql_query(query_wins, conn, params=[selected_track])
 
-    return df_play_count, df_most_picked, df_placement, df_points, df_wins
+    return play_count, df_most_picked, df_placement, df_points, df_wins
 
 @st.cache_data
 def get_h2h_data(players, event_filter, track_filter, mode_filter):
-    h2h_placeholders = ",".join(["%s"] * len(players))
+
+    # Filter conditions
+    placeholders = ",".join(["%s"] * len(players))
     event_cond = " AND tr.event_name = %s" if event_filter != "Alle Events" else ""
     track_cond = " AND r.track_name = %s" if track_filter != "Alle Strecken" else ""
     mode_cond = " AND tr.kario = 1" if mode_filter == "Kario" else (" AND tr.kario = 0" if mode_filter == "Mario" else "")
@@ -353,8 +404,9 @@ def get_h2h_data(players, event_filter, track_filter, mode_filter):
         SELECT r.tournament_id 
         FROM race_results rr 
         JOIN races r ON rr.race_id = r.id 
-        WHERE rr.player_name IN ({h2h_placeholders}) 
-        GROUP BY r.tournament_id HAVING COUNT(DISTINCT rr.player_name) = %s
+        WHERE rr.player_name IN ({placeholders}) 
+        GROUP BY r.tournament_id 
+        HAVING COUNT(DISTINCT rr.player_name) = %s
     """
 
     query_h2h_r = f"""
@@ -369,7 +421,7 @@ def get_h2h_data(players, event_filter, track_filter, mode_filter):
         JOIN tournament_results tr ON r.tournament_id = tr.tournament_id AND rr.player_name = tr.player_name 
         JOIN points_mapping pm ON rr.placement = pm.placement 
         WHERE r.tournament_id IN ({subquery_shared}) 
-        AND rr.player_name IN ({h2h_placeholders})
+        AND rr.player_name IN ({placeholders})
         {event_cond} 
         {track_cond} 
         {mode_cond};
@@ -396,7 +448,7 @@ def get_h2h_data(players, event_filter, track_filter, mode_filter):
             CASE WHEN tr.final_placement = 1 THEN 1 ELSE 0 END as tournament_win 
         FROM tournament_results tr 
         WHERE tr.tournament_id IN ({subquery_shared}) 
-        AND tr.player_name IN ({h2h_placeholders}) 
+        AND tr.player_name IN ({placeholders}) 
         {event_cond} 
         {mode_cond};
     """
@@ -409,12 +461,12 @@ def get_h2h_data(players, event_filter, track_filter, mode_filter):
 
 @st.cache_data
 def get_tournament_edit_data(tournament_id):
-    df_event = pd.read_sql_query("""
+    df_event = pd.read_sql_query(f"""
         SELECT event_name 
         FROM tournament_results 
         WHERE tournament_id = %s 
-        LIMIT 1;
-    """, conn, params=(tournament_id,))
+        LIMIT {st.secrets["custom_theme"]["ranking_limit"]};
+    """, conn, params=[tournament_id])
     event_name = df_event["event_name"].iloc[0]
 
     df_placements = pd.read_sql_query("""
@@ -423,7 +475,7 @@ def get_tournament_edit_data(tournament_id):
             final_placement 
         FROM tournament_results 
         WHERE tournament_id = %s;
-    """, conn, params=(tournament_id,))
+    """, conn, params=[tournament_id])
 
     df_points = pd.read_sql_query("""
         SELECT 
@@ -434,7 +486,7 @@ def get_tournament_edit_data(tournament_id):
         JOIN points_mapping pm ON rr.placement = pm.placement 
         WHERE r.tournament_id = %s 
         GROUP BY rr.player_name;
-    """, conn, params=(tournament_id,))
+    """, conn, params=[tournament_id])
 
     df_beer = pd.read_sql_query("""
         SELECT 
@@ -443,13 +495,13 @@ def get_tournament_edit_data(tournament_id):
             kario 
         FROM tournament_results 
         WHERE tournament_id = %s;
-    """, conn, params=(tournament_id,))
+    """, conn, params=[tournament_id])
 
     df_race_count = pd.read_sql_query("""
         SELECT COUNT(*) as c 
         FROM races 
         WHERE tournament_id = %s;
-    """, conn, params=(tournament_id,))
+    """, conn, params=[tournament_id])
     num_races = int(df_race_count['c'].iloc[0]) if not df_race_count.empty else 1
 
     df_race_list = pd.read_sql_query("""
@@ -458,7 +510,7 @@ def get_tournament_edit_data(tournament_id):
             track_name 
         FROM races 
         WHERE tournament_id = %s;
-    """, conn, params=(tournament_id,))
+    """, conn, params=[tournament_id])
 
     return event_name, df_placements, df_points, df_beer, num_races, df_race_list
 
@@ -470,7 +522,7 @@ def get_race_edit_data(race_id):
             picked_by_name 
         FROM races 
         WHERE id = %s;
-    """, conn, params=(race_id,))
+    """, conn, params=[race_id])
     track_name = df_race_info['track_name'].iloc[0] if not df_race_info.empty else None
     picked_by = df_race_info['picked_by_name'].iloc[0] if not df_race_info.empty else None
 
@@ -480,7 +532,7 @@ def get_race_edit_data(race_id):
             placement 
         FROM race_results 
         WHERE race_id = %s;
-    """, conn, params=(race_id,))
+    """, conn, params=[race_id])
 
     return track_name, picked_by, df_placements
 
@@ -490,10 +542,12 @@ def get_history_list():
         SELECT 
             t.id as "Turnier-ID", 
             t.date as "Datum", 
-            STRING_AGG(tr.player_name, ', ') as "Teilnehmer" 
+            STRING_AGG(tr.player_name, ', ') as "Teilnehmer",
+            tr.event_name as "Event"
         FROM tournaments t 
         JOIN tournament_results tr ON t.id = tr.tournament_id 
-        GROUP BY t.id, t.date ORDER BY t.id DESC;
+        GROUP BY t.id, t.date, tr.event_name
+        ORDER BY t.id DESC;
     """
     df =  pd.read_sql_query(query, conn)
 
@@ -509,7 +563,7 @@ def get_history_list():
 # ==========================================
 
 # Custom CSS for tabs
-st.markdown(
+st.html(
     f"""
         <style>
             div[data-testid="stMainBlockContainer"], .block-container {{
@@ -538,7 +592,7 @@ st.markdown(
             }}
         </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_javascript=True
 )
 
 st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
@@ -582,6 +636,9 @@ df_players = get_df_players()
 df_tracks = get_df_tracks()
 df_events = get_df_events()
 
+# Accidental reload
+if st.session_state.tournament_active:
+    prevent_accidental_reload()
 
 # ==========================================
 # TAB 1: TOURNAMENT TRACKING
@@ -681,17 +738,17 @@ with tab1:
                     # Placements
                     placements = {}
                     error = False
-                    ui_error = False
+                    placement_error = False
                     duplicate = False
                     for name in active_players:
                         saved_placement = st.session_state.backup_races.get(f"placement_{race_num}_{name}", None)
                         val = placement_selection(name, prefix_key=f"r_{race_num}", default_val=saved_placement)
                         if val in ["two_positions", "missing"]:
                             error = True
-                            ui_error = True
+                            placement_error = True
                         else:
                             placements[name] = int(val)
-                    if not ui_error and has_duplicates(list(placements.values())):
+                    if not placement_error and has_duplicates(list(placements.values())):
                         error = True
                         duplicate = True
                     if error:
@@ -705,10 +762,12 @@ with tab1:
                     if should_be_open:
                         if race_num < st.session_state.total_races:
                             if st.button(f"**Weiter**", key=f"btn_next_{race_num}"):
-                                if ui_error:
+                                if placement_error:
                                     st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                                 elif duplicate:
                                     st.error("❌ Doppelte Platzierung!")
+                                elif track_name is None:
+                                    st.error("❌ Gefahrene Strecke wählen!")
                                 else:
                                     st.session_state.current_round = race_num + 1
                                     st.rerun()
@@ -762,7 +821,7 @@ with tab1:
             selected_event = st.session_state.event
             final_placements = {}
             beer_finished = {}
-            ui_error = False
+            placement_error = False
             ui_error_beer = False
 
             # Total points
@@ -778,7 +837,7 @@ with tab1:
             for name in active_players:
                 val = placement_selection(name, prefix_key="fp", custom_title=f"**{name}** ({points_dict[name]} Punkte)**:**")
                 if val in ["two_positions", "missing"]:
-                    ui_error = True
+                    placement_error = True
                 else:
                     final_placements[name] = int(val)
 
@@ -807,7 +866,7 @@ with tab1:
 
                 # Finalize
                 if st.button("**Abschließen**", type="primary"):
-                    if ui_error:
+                    if placement_error:
                         st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                     elif st.session_state.game_mode == "Kario" and ui_error_beer:
                         st.error("❌ Für alle Spieler angeben, wann das Bier geleert wurde!")
@@ -823,7 +882,7 @@ with tab1:
                             INSERT INTO tournaments (date) 
                             VALUES (%s)
                             RETURNING id;
-                        """, (current_timestamp,))
+                        """, [current_timestamp])
                         tournament_id = cur.fetchone()[0]
 
                         # "races" table
@@ -979,7 +1038,7 @@ with tab2:
                             cur.execute("""
                                 DELETE FROM players
                                 WHERE name = %s;
-                            """, (delete_name,))
+                            """, [delete_name])
                             conn.commit()
                             get_df_players.clear()
                             st.error(f"{delete_name} gelöscht!")
@@ -1032,7 +1091,7 @@ with tab2:
                             cur.execute("""
                                 DELETE FROM events
                                 WHERE name = %s;
-                            """, (delete_event,))
+                            """, [delete_event])
                             conn.commit()
                             get_df_events.clear()
                             st.error(f"{delete_event} gelöscht!")
@@ -1066,15 +1125,15 @@ with tab2:
         mode_filter = st.segmented_control("Modus", options=["Gesamt", "Kario", "Mario"], default="Gesamt", key="mode_filter_tab2", label_visibility="collapsed")
 
         # Race metrics
-        df_races, df_tournaments, df_best, df_fav = get_player_stats(profile_name, event_filter, mode_filter, track_filter)
+        df_races, avg_normalized_points, df_tournaments, df_best, df_fav = get_player_stats(profile_name, event_filter, mode_filter, track_filter)
 
         st.divider()
 
         header("Spieler-Statistiken")
         if pd.notnull(df_races["total_races"]) and df_races["total_races"] > 0:
+
             total_pts = df_races["total_points"] or 0
             total_races = df_races["total_races"] or 1
-            normalized_points = (total_pts / total_races) * 4
 
             # Metrics display
             st.write("**Metriken:**")
@@ -1102,7 +1161,7 @@ with tab2:
             with m_col2:
                 st.metric("Ø-Punkte / Rennen", f"{df_races['avg_race_points']:.2f}")
                 if track_filter == "Alle Strecken":
-                    st.metric("Ø-Punkte / Turnier\n(4 R.)", f"{normalized_points:.2f}")
+                    st.metric("Ø-Punkte / Turnier\n(4 R.)", f"{avg_normalized_points:.2f}")
                     if mode_filter != "Mario":
                         st.metric("Ø-Rennen / Bier", f"{df_tournaments['avg_beer_finished_after']:.2f}" if pd.notnull(df_tournaments['avg_beer_finished_after']) else "N/A")
             with m_col3:
@@ -1110,19 +1169,18 @@ with tab2:
                 if track_filter == "Alle Strecken":
                     st.metric("Turniersiege", f"{int(df_tournaments['tournament_wins'] or 0)}")
             with m_col4:
-                st.metric("Rennen", f"{int(total_races)}")
+                st.metric("Rennen", f"{int(df_races['total_points'])}")
                 if track_filter == "Alle Strecken":
                     st.metric("Turniere", f"{int(df_tournaments['total_tournaments'] or 0)}")
 
-            if track_filter == "Alle Strecken":
-                st.write("**Ranglisten:**")
-                t_col1, t_col2 = st.columns(2)
-                with t_col1:
-                    semibold("🔝 Beste Strecken")
-                    st.dataframe(df_best, hide_index=True, width="stretch")
-                with t_col2:
-                    semibold("❤️ Lieblingsstrecken")
-                    st.dataframe(df_fav, hide_index=True, width="stretch")
+            st.write("**Ranglisten:**")
+            t_col1, t_col2 = st.columns(2)
+            with t_col1:
+                semibold("🔝 Beste Strecken")
+                st.dataframe(df_best, hide_index=True, width="stretch")
+            with t_col2:
+                semibold("❤️ Lieblingsstrecken")
+                st.dataframe(df_fav, hide_index=True, width="stretch")
         else:
             st.info("Keine Statistiken für diesen Spieler vorhanden.")
 
@@ -1138,10 +1196,10 @@ with tab3:
     st.divider()
 
     header("Strecken-Statistiken")
-    df_play_count, df_most_picked, df_placement, df_points, df_wins = get_track_stats(selected_track)
-    st.write(f"**Gespielt:** {df_play_count['count'].values[0]}x")
+    play_count, df_most_picked, df_placement, df_points, df_wins = get_track_stats(selected_track)
+    st.write(f"**Gespielt:** {play_count}x")
 
-    if df_play_count['count'].values[0] > 0:
+    if play_count > 0:
         st.write(f"**Gewählt:**")
         st.dataframe(df_most_picked, hide_index=True, width="stretch")
         st.write("**Ranglisten:**")
@@ -1227,7 +1285,7 @@ with tab5:
         st.info("Keine Turniere vorhanden.")
     else:
 
-        st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Teilnehmer", "Datum"])
+        st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Datum", "Teilnehmer", "Event"])
         st.divider()
 
         header("Turnier-Nr.")
@@ -1430,7 +1488,7 @@ with tab5:
                             cur.execute("""
                                 DELETE FROM tournaments 
                                 WHERE id = %s;
-                            """, (selected_tournament_id,))
+                            """, [selected_tournament_id])
                             conn.commit()
                             st.cache_data.clear()
 
