@@ -65,6 +65,52 @@ if "confirm_delete_tournament" not in st.session_state:
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
+def prevent_accidental_reload():
+    st.iframe(
+        """
+        <script>
+            const main_window = window.parent.document.defaultView;
+            main_window.addEventListener('beforeunload', function (event) {
+                event.preventDefault();
+                event.returnValue = ''; 
+                return '';
+            });
+        </script>
+        """,
+        height=1,
+        width="stretch",
+    )
+
+def has_duplicates(lst):
+    """Checks for duplicates in a list."""
+    return len(lst) != len(set(lst))
+
+def placement_selection(name, prefix_key, default_val=None, custom_title=None, disabled=False):
+    """Generates two 1x6 Segmented Controls and validates the input."""
+    title = custom_title if custom_title else f"**{name}:**"
+    st.write(title)
+
+    val1 = default_val if default_val in [1, 2, 3, 4, 5, 6] else None
+    val2 = default_val if default_val in [7, 8, 9, 10, 11, 12] else None
+
+    if disabled:
+        disable_segmented_control(f"seg1_{prefix_key}_{name}")
+        disable_segmented_control(f"seg2_{prefix_key}_{name}")
+
+    place1 = st.segmented_control("Platz 1-6", options=[1, 2, 3, 4, 5, 6], default=val1, key=f"seg1_{prefix_key}_{name}", label_visibility="collapsed")
+    place2 = st.segmented_control("Platz 7-12", options=[7, 8, 9, 10, 11, 12], default=val2, key=f"seg2_{prefix_key}_{name}", label_visibility="collapsed")
+
+    if (place1 is not None) and (place2 is not None):
+        return "two_positions"
+    if (place1 is None) and (place2 is None):
+        return "missing"
+
+    return place1 if place1 is not None else place2
+
+
+# ==========================================
+# 4. HTML INJECTIONS
+# ==========================================
 def header(text, font_size=st.secrets["custom_theme"]["header_font_size"], font_weight=st.secrets["custom_theme"]["bold_font_weight"], font_color=st.secrets["custom_theme"]["font_color"], border=st.secrets["custom_theme"]["border"], highlight_color=st.secrets["custom_theme"]["highlight_color"], padding_left=st.secrets["custom_theme"]["padding_left"], padding_bottom=st.secrets["custom_theme"]["padding_bottom"]):
     st.html(
         f"""
@@ -98,47 +144,84 @@ def semibold(text, font_size=st.secrets["custom_theme"]["base_font_size"], font_
         unsafe_allow_javascript=True
     )
 
-def prevent_accidental_reload():
-    st.iframe(
-        """
-        <script>
-            const main_window = window.parent.document.defaultView;
-            main_window.addEventListener('beforeunload', function (event) {
-                event.preventDefault();
-                event.returnValue = ''; 
-                return '';
-            });
-        </script>
+def style_tabs(padding_top=st.secrets["custom_theme"]["padding_top"], font_size=st.secrets["custom_theme"]["header_font_size"], font_weight=st.secrets["custom_theme"]["bold_font_weight"]):
+    st.html(
+        f"""
+            <style>
+                div[data-testid="stMainBlockContainer"], .block-container {{
+                    padding-top: {padding_top}
+                }}
+                /* Force parent flex wrapper to span the full width */
+                div[data-testid="stTabs"] > div[data-orientation="horizontal"] {{
+                    width: 100% !important;
+                }}
+
+                /* Force tablist to span the full width of wrapper */
+                div[data-testid="stTabs"] div[role="tablist"] {{
+                    width: 100% !important;
+                }}
+
+                /* Force tabs to grow equally */
+                div[data-testid="stTabs"] div[role="tab"] {{
+                    flex: 1 1 0% !important;
+                    justify-content: center !important;
+                }}
+
+                /* Increase font/icon size */
+                div[data-testid="stTabs"] div[role="tab"] p {{
+                    font-size: {font_size} !important;
+                    font-weight: {st.secrets["custom_theme"]["bold_font_weight"]} !important; 
+                }}
+            </style>
         """,
-        height="content",
-        width="stretch",
+        unsafe_allow_javascript=True
     )
 
-def has_duplicates(lst):
-    """Checks for duplicates in a list."""
-    return len(lst) != len(set(lst))
+def style_metrics(label_font_size=st.secrets["custom_theme"]["base_font_size"], label_font_weight=st.secrets["custom_theme"]["semibold_font_weight"], metrics_font_size=st.secrets["custom_theme"]["metrics_font_size"], metrics_font_weight=st.secrets["custom_theme"]["metrics_font_weight"]):
+    st.html(f"""
+        <style>
+            /* Label */
+            [data-testid="stMetricLabel"] p {{
+                font-size: {label_font_size} !important;
+                font-weight: {label_font_weight} !important;
+                white-space: pre-line !important;
+                word-break: break-word !important;
+            }}
+            /* Metric value */
+            [data-testid="stMetricValue"] {{
+                font-size: {metrics_font_size} !important;
+                font-weight: {metrics_font_weight} !important;
+            }}
+        </style>
+    """, unsafe_allow_javascript=True)
 
-def placement_selection(name, prefix_key, default_val=None, custom_title=None, disabled=False):
-    """Generates two 1x6 Segmented Controls and validates the input."""
-    title = custom_title if custom_title else f"**{name}:**"
-    st.write(title)
+def disable_segmented_control(key):
+    st.html(
+        f"""
+            <style>
+                .st-key-{key} button[data-variant="segmented_control"] {{
+                    pointer-events: none !important;
+                }}
+            </style>
+        """,
+        unsafe_allow_javascript=True
+    )
 
-    val1 = default_val if default_val in [1, 2, 3, 4, 5, 6] else None
-    val2 = default_val if default_val in [7, 8, 9, 10, 11, 12] else None
-
-    place1 = st.segmented_control("Platz 1-6", options=[1, 2, 3, 4, 5, 6], default=val1, key=f"seg1_{prefix_key}_{name}", label_visibility="collapsed", disabled=disabled)
-    place2 = st.segmented_control("Platz 7-12", options=[7, 8, 9, 10, 11, 12], default=val2, key=f"seg2_{prefix_key}_{name}", label_visibility="collapsed", disabled=disabled)
-
-    if (place1 is not None) and (place2 is not None):
-        return "two_positions"
-    if (place1 is None) and (place2 is None):
-        return "missing"
-
-    return place1 if place1 is not None else place2
+def disable_selectbox(key):
+    st.html(
+        f"""
+            <style>
+                .st-key-{key} div[data-testid="stSelectbox"] {{
+                    pointer-events: none !important;
+                }}
+            </style>
+        """,
+        unsafe_allow_javascript=True
+    )
 
 
 # ==========================================
-# 4. CACHED SQL FUNCTIONS
+# 5. CACHED SQL FUNCTIONS
 # ==========================================
 @st.cache_data
 def get_points_mapping():
@@ -438,7 +521,7 @@ def get_h2h_data(players, event_filter, track_filter, mode_filter):
             tr.player_name as player, 
             tr.final_placement, 
             (
-                SELECT SUM(pm2.points) 
+                SELECT (SUM(pm2.points)::NUMERIC / COUNT(rr2.id)) * 4 
                 FROM race_results rr2 
                 JOIN points_mapping pm2 ON rr2.placement = pm2.placement 
                 JOIN races r2 ON rr2.race_id = r2.id 
@@ -465,7 +548,7 @@ def get_tournament_edit_data(tournament_id):
         SELECT event_name 
         FROM tournament_results 
         WHERE tournament_id = %s 
-        LIMIT {st.secrets["custom_theme"]["ranking_limit"]};
+        LIMIT 1;
     """, conn, params=[tournament_id])
     event_name = df_event["event_name"].iloc[0]
 
@@ -474,7 +557,8 @@ def get_tournament_edit_data(tournament_id):
             player_name, 
             final_placement 
         FROM tournament_results 
-        WHERE tournament_id = %s;
+        WHERE tournament_id = %s
+        ORDER BY final_placement ASC;
     """, conn, params=[tournament_id])
 
     df_points = pd.read_sql_query("""
@@ -485,16 +569,19 @@ def get_tournament_edit_data(tournament_id):
         JOIN races r ON rr.race_id = r.id 
         JOIN points_mapping pm ON rr.placement = pm.placement 
         WHERE r.tournament_id = %s 
-        GROUP BY rr.player_name;
+        GROUP BY rr.player_name
+        ORDER BY total_points DESC;
     """, conn, params=[tournament_id])
 
     df_beer = pd.read_sql_query("""
         SELECT 
             player_name, 
+            final_placement,
             beer_finished_after, 
             kario 
         FROM tournament_results 
-        WHERE tournament_id = %s;
+        WHERE tournament_id = %s
+        ORDER BY final_placement ASC;
     """, conn, params=[tournament_id])
 
     df_race_count = pd.read_sql_query("""
@@ -531,7 +618,8 @@ def get_race_edit_data(race_id):
             player_name, 
             placement 
         FROM race_results 
-        WHERE race_id = %s;
+        WHERE race_id = %s
+        ORDER BY placement ASC;
     """, conn, params=[race_id])
 
     return track_name, picked_by, df_placements
@@ -543,10 +631,11 @@ def get_history_list():
             t.id as "Turnier-ID", 
             t.date as "Datum", 
             STRING_AGG(tr.player_name, ', ') as "Teilnehmer",
+            CASE WHEN tr.kario = 1 THEN 'Kario' ELSE 'Mario' END as "Modus",
             tr.event_name as "Event"
         FROM tournaments t 
         JOIN tournament_results tr ON t.id = tr.tournament_id 
-        GROUP BY t.id, t.date, tr.event_name
+        GROUP BY t.id, t.date, tr.kario, tr.event_name
         ORDER BY t.id DESC;
     """
     df =  pd.read_sql_query(query, conn)
@@ -559,44 +648,12 @@ def get_history_list():
 
 
 # ==========================================
-# 3. PAGE CONFIG
+# 6. PAGE CONFIG
 # ==========================================
 
-# Custom CSS for tabs
-st.html(
-    f"""
-        <style>
-            div[data-testid="stMainBlockContainer"], .block-container {{
-                padding-top: {st.secrets["custom_theme"]["padding_top"]}
-            }}
-            /* Force parent flex wrapper to span the full width */
-            div[data-testid="stTabs"] > div[data-orientation="horizontal"] {{
-                width: 100% !important;
-            }}
-        
-            /* Force tablist to span the full width of wrapper */
-            div[data-testid="stTabs"] div[role="tablist"] {{
-                width: 100% !important;
-            }}
-        
-            /* Force tabs to grow equally */
-            div[data-testid="stTabs"] div[role="tab"] {{
-                flex: 1 1 0% !important;
-                justify-content: center !important;
-            }}
-        
-            /* Increase font/icon size */
-            div[data-testid="stTabs"] div[role="tab"] p {{
-                font-size: {st.secrets["custom_theme"]["header_font_size"]} !important;
-                font-weight: {st.secrets["custom_theme"]["bold_font_weight"]} !important; 
-            }}
-        </style>
-    """,
-    unsafe_allow_javascript=True
-)
-
-st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎮", "👤", "🏁", "⚔️", "📋"], width="stretch")
+# HTML injections
+style_tabs()
+style_metrics()
 
 # Sidebar
 with st.sidebar:
@@ -632,13 +689,16 @@ with st.sidebar:
             st.session_state.master = False
             st.rerun()
 
+# Prevent accidental reload
+if st.session_state.tournament_active or st.session_state.waiting_for_placement:
+    prevent_accidental_reload()
+
+st.set_page_config(page_title="Kario Mart Dashboard", page_icon="🏎️", layout="centered")
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎮", "👤", "🏁", "⚔️", "📋"], width="stretch")
+
 df_players = get_df_players()
 df_tracks = get_df_tracks()
 df_events = get_df_events()
-
-# Accidental reload
-if st.session_state.tournament_active:
-    prevent_accidental_reload()
 
 # ==========================================
 # TAB 1: TOURNAMENT TRACKING
@@ -740,6 +800,7 @@ with tab1:
                     error = False
                     placement_error = False
                     duplicate = False
+                    track_missing = False
                     for name in active_players:
                         saved_placement = st.session_state.backup_races.get(f"placement_{race_num}_{name}", None)
                         val = placement_selection(name, prefix_key=f"r_{race_num}", default_val=saved_placement)
@@ -751,6 +812,9 @@ with tab1:
                     if not placement_error and has_duplicates(list(placements.values())):
                         error = True
                         duplicate = True
+                    if track_name is None:
+                        error = True
+                        track_missing = True
                     if error:
                         all_races_valid = False
                         if first_invalid_race is None:
@@ -766,7 +830,7 @@ with tab1:
                                     st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
                                 elif duplicate:
                                     st.error("❌ Doppelte Platzierung!")
-                                elif track_name is None:
+                                elif track_missing:
                                     st.error("❌ Gefahrene Strecke wählen!")
                                 else:
                                     st.session_state.current_round = race_num + 1
@@ -780,7 +844,7 @@ with tab1:
                 # Save
                 if st.button("**Speichern**", type="primary"):
                     if not all_races_valid:
-                        st.error(f"❌ Fehler bei den Platzierungen! Überprüfe Rennen {first_invalid_race}.")
+                        st.error(f"❌ Fehler! Überprüfe Rennen {first_invalid_race}.")
                         st.session_state.current_round = first_invalid_race
                         st.session_state.final_check_failed = True
                         time.sleep(2)
@@ -834,6 +898,7 @@ with tab1:
                         points_dict[name] += points_mapping[placement]
 
             # Tournament placements
+            active_players.sort(key=lambda name: points_dict[name], reverse=True)
             for name in active_players:
                 val = placement_selection(name, prefix_key="fp", custom_title=f"**{name}** ({points_dict[name]} Punkte)**:**")
                 if val in ["two_positions", "missing"]:
@@ -1137,21 +1202,6 @@ with tab2:
 
             # Metrics display
             st.write("**Metriken:**")
-            st.html(f"""<style>
-                    /* Label */
-                    [data-testid="stMetricLabel"] p {{
-                        font-size: {st.secrets["custom_theme"]["base_font_size"]} !important;
-                        font-weight: {st.secrets["custom_theme"]["semibold_font_weight"]} !important;
-                        white-space: pre-line !important;
-                        word-break: break-word !important;
-                    }}
-                    /* Metric value */
-                    [data-testid="stMetricValue"] {{
-                        font-size: {st.secrets["custom_theme"]["metrics_font_size"]} !important;
-                        font-weight: {st.secrets["custom_theme"]["metrics_font_weight"]} !important;
-                    }}
-                </style>
-                """, unsafe_allow_javascript=True)
             m_col1, m_col2, m_col3, m_col4 = st.columns(4)
             with m_col1:
                 st.metric("Ø-Platz Rennen", f"{df_races['avg_race_placement']:.2f}")
@@ -1285,11 +1335,11 @@ with tab5:
         st.info("Keine Turniere vorhanden.")
     else:
 
-        st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Datum", "Teilnehmer", "Event"])
+        st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Datum", "Teilnehmer", "Modus", "Event"])
+
         st.divider()
 
         header("Turnier-Nr.")
-
         num_to_id = dict(zip(df_history["Turnier-Nr."], df_history["Turnier-ID"]))
         selected_tournament_num = st.selectbox("Turnier zum Bearbeiten", df_history['Turnier-Nr.'].tolist(),key="select_edit_id",label_visibility="collapsed")
         selected_tournament_id = num_to_id.get(selected_tournament_num)
@@ -1302,6 +1352,31 @@ with tab5:
             event_name, df_current_placements, df_current_points, df_current_beer, num_races_in_tournament, df_race_list = get_tournament_edit_data(selected_tournament_id)
             current_points_dict = dict(zip(df_current_points["player_name"], df_current_points["total_points"]))
 
+            # Event
+            header("Event")
+            current_event_index = df_events["name"].tolist().index(event_name) + 1 if pd.notna(event_name) else 0
+            if disable_edit:
+                disable_selectbox("edit_event")
+            new_event = st.selectbox("Event", ["Kein Event"] + df_events["name"].tolist(), key="edit_event", label_visibility="collapsed", index=current_event_index, placeholder="")
+            if not disable_edit:
+                if st.button("**Aktualisieren**", type="primary", key="event_update"):
+                    cur = conn.cursor()
+                    if new_event == "Kein Event":
+                        new_event = None
+                    cur.execute("""
+                        UPDATE tournament_results
+                        SET event_name = %s
+                        WHERE tournament_id = %s;
+                    """, (new_event, selected_tournament_id))
+                    conn.commit()
+                    st.cache_data.clear()
+                    st.success("Event aktualisiert!")
+                    time.sleep(2)
+                    st.rerun()
+
+            st.divider()
+
+
             # Tournament placements
             header("Endergebnisse")
 
@@ -1309,7 +1384,7 @@ with tab5:
             ui_error_fp = False
 
             for _, row in df_current_placements.iterrows():
-                val = placement_selection(row['player_name'], prefix_key=f"edit_fp_{selected_tournament_id}", custom_title=f"**{row['player_name']}** ({current_points_dict.get(row['player_name'], 0)} Punkte)**:**", default_val=int(row['final_placement']))
+                val = placement_selection(row['player_name'], prefix_key=f"edit_fp_{selected_tournament_id}", custom_title=f"**{row['player_name']}** ({current_points_dict.get(row['player_name'], 0)} Punkte)**:**", default_val=int(row['final_placement']), disabled=disable_edit)
                 if val in ["two_positions", "missing"]:
                     ui_error_fp = True
                 else:
@@ -1331,9 +1406,8 @@ with tab5:
                             """, (new_final_placement, selected_tournament_id, player_name))
                         conn.commit()
                         st.cache_data.clear()
-                        for key in list(st.session_state.keys()):
-                            if f"edit_fp_{selected_tournament_id}" in key:
-                                del st.session_state[key]
+                        st.success("Endergebnisse aktualisiert!")
+                        time.sleep(2)
                         st.rerun()
 
             # Kario
@@ -1353,9 +1427,11 @@ with tab5:
 
                     st.write(f"**{row['player_name']}:**")
                     beer_default = "❌"
-                    if not isnan(row["beer_finished_after"]):
+                    if pd.notna(row["beer_finished_after"]):
                         beer_default = row["beer_finished_after"]
 
+                    if disable_edit:
+                        disable_segmented_control(f"edit_beer_fp_{selected_tournament_id}_{row['player_name']}")
                     beer_val = st.segmented_control(f"Beer_{row['player_name']}", options=beer_options, key=f"edit_beer_fp_{selected_tournament_id}_{row['player_name']}", label_visibility="collapsed", default=beer_default)
                     if beer_val is None:
                         ui_error_b_fp = True
@@ -1373,18 +1449,18 @@ with tab5:
                             st.error("❌ Für alle Spieler angeben, wann das Bier geleert wurde!")
                         else:
                             cur = conn.cursor()
-                            if "❌" in list(edited_beer.values()):
-                                st.error("⚠️ Bier nicht geleert, Endplatzierung wird auf 12 gesetzt!")
+                            # if "❌" in list(edited_beer.values()):
+                            #     st.error("⚠️ Bier nicht geleert, Endplatzierung wird auf 12 gesetzt!")
 
                             for player_name, new_beer_val in edited_beer.items():
                                 if new_beer_val == "❌":
                                     new_beer_val = None
-                                    new_final_placement = 12
-                                    cur.execute("""
-                                        UPDATE tournament_results 
-                                        SET final_placement = %s 
-                                        WHERE tournament_id = %s AND player_name = %s;
-                                    """, (new_final_placement, selected_tournament_id, player_name))
+                                #     new_final_placement = 12
+                                #     cur.execute("""
+                                #         UPDATE tournament_results
+                                #         SET final_placement = %s
+                                #         WHERE tournament_id = %s AND player_name = %s;
+                                #     """, (new_final_placement, selected_tournament_id, player_name))
 
                                 cur.execute("""
                                     UPDATE tournament_results 
@@ -1397,6 +1473,7 @@ with tab5:
                             for key in list(st.session_state.keys()):
                                 if f"edit_fp_{selected_tournament_id}" in key:
                                     del st.session_state[key]
+                            st.success("Biere aktualisiert!")
                             time.sleep(2)
                             st.rerun()
 
@@ -1414,6 +1491,8 @@ with tab5:
 
                     st.write("**Strecke:**")
                     track_index = all_track_names.index(curr_track_name) if curr_track_name in all_track_names else 0
+                    if disable_edit:
+                        disable_selectbox(f"edit_track_{race_id}")
                     edit_track_name = st.selectbox("Strecke", all_track_names, index=track_index, key=f"edit_track_{race_id}", label_visibility="collapsed")
                     race_players = df_race_placements['player_name'].tolist()
 
@@ -1421,6 +1500,8 @@ with tab5:
                     if picker_name_db is not None or st.session_state.get("selection_mode") == "Auswahl":
                         st.write("**Gewählt von:**")
                         picker_index = race_players.index(picker_name_db) if picker_name_db in race_players else 0
+                        if disable_edit:
+                            disable_selectbox(f"edit_picker_{race_id}")
                         edit_picked_by_name = st.selectbox("Gewählt von", race_players, index=picker_index, key=f"edit_picker_{race_id}", label_visibility="collapsed")
 
                     edited_race_placements = {}
@@ -1428,25 +1509,25 @@ with tab5:
                     has_duplicate_race = False
 
                     for _, p_row in df_race_placements.iterrows():
-                        val = placement_selection(p_row['player_name'], prefix_key=f"edit_r_{race_id}", default_val=int(p_row['placement']))
+                        val = placement_selection(p_row['player_name'], prefix_key=f"edit_r_{race_id}", default_val=int(p_row['placement']), disabled=disable_edit)
 
                         if val in ["two_positions", "missing"]:
                             ui_race_error = True
                         else:
                             edited_race_placements[p_row['player_name']] = int(val)
 
-                    if not ui_race_error and has_duplicates(list(edited_race_placements.values())):
-                        ui_race_error = True
-                        duplicate_race = True
+                    # if not ui_race_error and has_duplicates(list(edited_race_placements.values())):
+                    #     ui_race_error = True
+                    #     has_duplicate_race = True
 
                     st.write("")
 
                     if not disable_edit:
                         if st.button("**Aktualisieren**", key=f"btn_update_race_{race_id}", type="primary"):
-                            if ui_race_error and not duplicate_race:
+                            if ui_race_error and not has_duplicate_race:
                                 st.error("❌ Exakt eine Platzierung pro Spieler wählen!")
-                            elif duplicate_race:
-                                st.error("❌ Doppelte Platzierung!")
+                            # elif has_duplicate_race:
+                            #     st.error("❌ Doppelte Platzierung!")
                             else:
                                 cur = conn.cursor()
 
@@ -1465,7 +1546,7 @@ with tab5:
 
                                 conn.commit()
                                 st.cache_data.clear()
-                                st.success("Rennen aktualisiert!")
+                                st.success("Rennergebnis aktualisiert!")
                                 time.sleep(2)
                                 st.rerun()
 
