@@ -1,4 +1,5 @@
 streamlit==1.59.1
 pandas
 streamlit
+streamlit-cookies-controller
 psycopg2-binary
