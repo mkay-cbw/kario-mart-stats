@@ -1,22 +1,24 @@
 import time
-from math import isnan
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from streamlit_cookies_controller import CookieController
 import pandas as pd
 import streamlit as st
 import psycopg2
+import uuid
 import warnings
 warnings.filterwarnings('ignore', message='.*pandas only supports SQLAlchemy.*')
 
 
 # ==========================================
-# 1. CONNECTION
+# 1. CONNECTION & COOKIES
 # ==========================================
 @st.cache_resource
 def init_connection():
     return psycopg2.connect(**st.secrets["postgres"])
 conn = init_connection()
 cursor = conn.cursor()
+cookie_manager = CookieController()
 
 
 # ==========================================
@@ -28,6 +30,8 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "master" not in st.session_state:
     st.session_state.master = False
+if "username" not in st.session_state:
+    st.session_state["username"] = None
 
 # Tournament parameters
 if "active_players" not in st.session_state:
@@ -144,6 +148,10 @@ def semibold(text, font_size=st.secrets["custom_theme"]["base_font_size"], font_
         unsafe_allow_javascript=True
     )
 
+def centered_success(text):
+    st.html("""<div id="center-success-marker"></div>""", unsafe_allow_javascript=True)
+    st.success(text)
+
 def style_tabs(padding_top=st.secrets["custom_theme"]["padding_top"], font_size=st.secrets["custom_theme"]["header_font_size"], font_weight=st.secrets["custom_theme"]["bold_font_weight"]):
     st.html(
         f"""
@@ -170,7 +178,7 @@ def style_tabs(padding_top=st.secrets["custom_theme"]["padding_top"], font_size=
                 /* Increase font/icon size */
                 div[data-testid="stTabs"] div[role="tab"] p {{
                     font-size: {font_size} !important;
-                    font-weight: {st.secrets["custom_theme"]["bold_font_weight"]} !important; 
+                    font-weight: {font_weight} !important; 
                 }}
             </style>
         """,
@@ -178,22 +186,46 @@ def style_tabs(padding_top=st.secrets["custom_theme"]["padding_top"], font_size=
     )
 
 def style_metrics(label_font_size=st.secrets["custom_theme"]["base_font_size"], label_font_weight=st.secrets["custom_theme"]["semibold_font_weight"], metrics_font_size=st.secrets["custom_theme"]["metrics_font_size"], metrics_font_weight=st.secrets["custom_theme"]["metrics_font_weight"]):
-    st.html(f"""
-        <style>
-            /* Label */
-            [data-testid="stMetricLabel"] p {{
-                font-size: {label_font_size} !important;
-                font-weight: {label_font_weight} !important;
-                white-space: pre-line !important;
-                word-break: break-word !important;
-            }}
-            /* Metric value */
-            [data-testid="stMetricValue"] {{
-                font-size: {metrics_font_size} !important;
-                font-weight: {metrics_font_weight} !important;
-            }}
-        </style>
-    """, unsafe_allow_javascript=True)
+    st.html(
+        f"""
+            <style>
+                /* Label */
+                [data-testid="stMetricLabel"] p {{
+                    font-size: {label_font_size} !important;
+                    font-weight: {label_font_weight} !important;
+                    white-space: pre-line !important;
+                    word-break: break-word !important;
+                }}
+                /* Metric value */
+                [data-testid="stMetricValue"] {{
+                    font-size: {metrics_font_size} !important;
+                    font-weight: {metrics_font_weight} !important;
+                }}
+            </style>
+        """, unsafe_allow_javascript=True)
+
+def style_centered_success():
+    st.html(
+        """
+            <style>
+                div[data-testid="stElementContainer"]:has(#center-success-marker) + div[data-testid="stElementContainer"] div[data-testid="stAlert"] > div {
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                }
+            </style>
+        """
+    )
+
+def style_expander(font_size=st.secrets["custom_theme"]["base_font_size"]):
+    st.html(
+        f"""
+            <style>
+                div[data-testid="stExpander"] summary p {{
+                    font-size: {font_size} !important;
+                }}
+            </style>
+        """, unsafe_allow_javascript=True)
 
 def disable_segmented_control(key):
     st.html(
@@ -223,6 +255,16 @@ def disable_selectbox(key):
 # ==========================================
 # 5. CACHED SQL FUNCTIONS
 # ==========================================
+@st.cache_data
+def get_is_master(session_id):
+    df = pd.read_sql_query(
+        """
+            SELECT master 
+            FROM active_sessions 
+            WHERE session_id = %s AND expires_at > CURRENT_TIMESTAMP;
+        """, conn, params=[session_id])
+    return df["master"][0] if not df.empty else None
+
 @st.cache_data
 def get_points_mapping():
     df = pd.read_sql_query("SELECT * FROM points_mapping;", conn)
@@ -630,7 +672,7 @@ def get_history_list():
         SELECT 
             t.id as "Turnier-ID", 
             t.date as "Datum", 
-            STRING_AGG(tr.player_name, ', ') as "Teilnehmer",
+            STRING_AGG(tr.player_name, ', ' ORDER BY tr.final_placement ASC) as "Teilnehmer",
             CASE WHEN tr.kario = 1 THEN 'Kario' ELSE 'Mario' END as "Modus",
             tr.event_name as "Event"
         FROM tournaments t 
@@ -648,12 +690,44 @@ def get_history_list():
 
 
 # ==========================================
-# 6. PAGE CONFIG
+# 6. AUTHENTICATION CHECK
+# ==========================================
+if not st.session_state["authenticated"]:
+    saved_session_id = cookie_manager.get("session_id")
+
+    if saved_session_id:
+        cur = conn.cursor()
+        is_master = get_is_master(saved_session_id)
+        if is_master is not None:
+            st.session_state["authenticated"] = True
+            st.session_state["master"] = True if is_master == 1 else False
+            new_expires_at = datetime.now() + timedelta(days=st.secrets["cookies"]["expires_after_days"])
+            cur.execute("""
+                UPDATE active_sessions 
+                SET expires_at = %s 
+                WHERE session_id = %s;
+            """, [new_expires_at, saved_session_id])
+            conn.commit()
+            get_is_master.clear()
+            cookie_manager.set("session_id", saved_session_id, max_age=st.secrets["cookies"]["expires_after_days"]*24*60*60)
+            time.sleep(0.3)
+        else:
+            cur.execute("DELETE FROM active_sessions WHERE session_id = %s;", [saved_session_id])
+            conn.commit()
+            get_is_master.clear()
+            cookie_manager.remove("session_id")
+            time.sleep(0.3)
+
+
+# ==========================================
+# 7. PAGE CONFIG
 # ==========================================
 
 # HTML injections
 style_tabs()
 style_metrics()
+style_centered_success()
+style_expander()
 
 # Sidebar
 with st.sidebar:
@@ -667,13 +741,31 @@ with st.sidebar:
             if password == st.secrets["passwords"]["master_pw"]:
                 st.session_state.authenticated = True
                 st.session_state.master = True
-                st.success("Anmeldung erfolgreich!")
-                time.sleep(2)
+                new_session_id = str(uuid.uuid4())
+                expires_at = datetime.now() + timedelta(days=st.secrets["cookies"]["expires_after_days"])
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO active_sessions (session_id, master, expires_at)
+                    VALUES (%s, 1, %s);
+                """, [new_session_id, expires_at])
+                conn.commit()
+                get_is_master.clear()
+                cookie_manager.set("session_id", new_session_id, max_age=st.secrets["cookies"]["expires_after_days"]*24*60*60)
+                time.sleep(0.3)
                 st.rerun()
             elif password == st.secrets["passwords"]["user_pw"]:
                 st.session_state.authenticated = True
-                st.success("Anmeldung erfolgreich!")
-                time.sleep(2)
+                new_session_id = str(uuid.uuid4())
+                expires_at = datetime.now() + timedelta(days=st.secrets["cookies"]["expires_after_days"])
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO active_sessions (session_id, master, expires_at)
+                    VALUES (%s, 0, %s);
+                """, [new_session_id, expires_at])
+                conn.commit()
+                get_is_master.clear()
+                cookie_manager.set("session_id", new_session_id, max_age=st.secrets["cookies"]["expires_after_days"]*24*60*60)
+                time.sleep(0.3)
                 st.rerun()
             else:
                 st.error("❌ Falsches Passwort!")
@@ -681,12 +773,19 @@ with st.sidebar:
 
         # Login successful
         if st.session_state.master:
-            st.success("🔒 Angemeldet als Admin")
+            centered_success("🔒 Angemeldet als Admin")
         else:
-            st.success("🔒 Angemeldet")
+            centered_success("🔒 Angemeldet")
         if st.button("**Abmelden**", type="secondary", width="stretch"):
             st.session_state.authenticated = False
             st.session_state.master = False
+            current_session_id = cookie_manager.get("session_id")
+            if current_session_id:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM active_sessions WHERE session_id = %s;", [current_session_id])
+                conn.commit()
+            cookie_manager.remove("session_id")
+            time.sleep(0.3)
             st.rerun()
 
 # Prevent accidental reload
@@ -1335,7 +1434,7 @@ with tab5:
         st.info("Keine Turniere vorhanden.")
     else:
 
-        st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Datum", "Teilnehmer", "Modus", "Event"])
+        st.dataframe(df_history, width="stretch", hide_index=True, column_order=["Turnier-Nr.", "Datum", "Teilnehmer", "Modus", "Event"], height=st.secrets["custom_theme"]["dataframe_height"])
 
         st.divider()
 
