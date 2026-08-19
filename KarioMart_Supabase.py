@@ -11,14 +11,13 @@ warnings.filterwarnings('ignore', message='.*pandas only supports SQLAlchemy.*')
 
 
 # ==========================================
-# 1. CONNECTION & COOKIES
+# 1. CONNECTION
 # ==========================================
 @st.cache_resource
 def init_connection():
     return psycopg2.connect(**st.secrets["postgres"])
 conn = init_connection()
 cursor = conn.cursor()
-cookie_manager = CookieController()
 
 
 # ==========================================
@@ -69,6 +68,31 @@ if "confirm_delete_tournament" not in st.session_state:
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
+def set_authentication(cookie_manager):
+    saved_session_id = cookie_manager.get("session_id")
+    if saved_session_id:
+        cur = conn.cursor()
+        is_master = get_master(saved_session_id)
+        if is_master is not None:
+            st.session_state["authenticated"] = True
+            st.session_state["master"] = True if is_master == 1 else False
+            new_expires_at = datetime.now() + timedelta(days=st.secrets["cookies"]["expires_after_days"])
+            cur.execute("""
+                UPDATE active_sessions 
+                SET expires_at = %s 
+                WHERE session_id = %s;
+            """, [new_expires_at, saved_session_id])
+            conn.commit()
+            get_master.clear()
+            cookie_manager.set("session_id", saved_session_id, max_age=st.secrets["cookies"]["expires_after_days"]*24*60*60)
+            time.sleep(0.3)
+        else:
+            cur.execute("DELETE FROM active_sessions WHERE session_id = %s;", [saved_session_id])
+            conn.commit()
+            get_master.clear()
+            cookie_manager.remove("session_id")
+            time.sleep(0.3)
+
 def prevent_accidental_reload():
     st.iframe(
         """
@@ -151,6 +175,30 @@ def semibold(text, font_size=st.secrets["custom_theme"]["base_font_size"], font_
 def centered_success(text):
     st.html("""<div id="center-success-marker"></div>""", unsafe_allow_javascript=True)
     st.success(text)
+
+def style_prevent_accidental_reload():
+    st.html(
+        """
+            <style>
+                div.element-container:has(iframe[srcdoc*="beforeunload"]) {
+                    display: none !important;
+                }
+            </style>
+        """,
+        unsafe_allow_javascript=True
+)
+
+def style_cookie_controller():
+    st.html(
+        """
+            <style>
+                div.element-container:has(iframe[title="streamlit_cookies_controller.cookie_controller.cookie_controller"]) {
+                    display: none !important;
+                }
+            </style>
+        """,
+        unsafe_allow_javascript=True
+    )
 
 def style_tabs(padding_top=st.secrets["custom_theme"]["padding_top"], font_size=st.secrets["custom_theme"]["header_font_size"], font_weight=st.secrets["custom_theme"]["bold_font_weight"]):
     st.html(
@@ -256,7 +304,7 @@ def disable_selectbox(key):
 # 5. CACHED SQL FUNCTIONS
 # ==========================================
 @st.cache_data
-def get_is_master(session_id):
+def get_master(session_id):
     df = pd.read_sql_query(
         """
             SELECT master 
@@ -690,37 +738,7 @@ def get_history_list():
 
 
 # ==========================================
-# 6. AUTHENTICATION CHECK
-# ==========================================
-if not st.session_state["authenticated"]:
-    saved_session_id = cookie_manager.get("session_id")
-
-    if saved_session_id:
-        cur = conn.cursor()
-        is_master = get_is_master(saved_session_id)
-        if is_master is not None:
-            st.session_state["authenticated"] = True
-            st.session_state["master"] = True if is_master == 1 else False
-            new_expires_at = datetime.now() + timedelta(days=st.secrets["cookies"]["expires_after_days"])
-            cur.execute("""
-                UPDATE active_sessions 
-                SET expires_at = %s 
-                WHERE session_id = %s;
-            """, [new_expires_at, saved_session_id])
-            conn.commit()
-            get_is_master.clear()
-            cookie_manager.set("session_id", saved_session_id, max_age=st.secrets["cookies"]["expires_after_days"]*24*60*60)
-            time.sleep(0.3)
-        else:
-            cur.execute("DELETE FROM active_sessions WHERE session_id = %s;", [saved_session_id])
-            conn.commit()
-            get_is_master.clear()
-            cookie_manager.remove("session_id")
-            time.sleep(0.3)
-
-
-# ==========================================
-# 7. PAGE CONFIG
+# 7. PAGE CONFIG & AUTHENTICATION CHECK
 # ==========================================
 
 # HTML injections
@@ -728,6 +746,13 @@ style_tabs()
 style_metrics()
 style_centered_success()
 style_expander()
+style_prevent_accidental_reload()
+style_cookie_controller()
+
+# Authentication check
+cookie_manager = CookieController()
+if not st.session_state.authenticated:
+    set_authentication(cookie_manager)
 
 # Sidebar
 with st.sidebar:
@@ -749,7 +774,7 @@ with st.sidebar:
                     VALUES (%s, 1, %s);
                 """, [new_session_id, expires_at])
                 conn.commit()
-                get_is_master.clear()
+                get_master.clear()
                 cookie_manager.set("session_id", new_session_id, max_age=st.secrets["cookies"]["expires_after_days"]*24*60*60)
                 time.sleep(0.3)
                 st.rerun()
@@ -763,7 +788,7 @@ with st.sidebar:
                     VALUES (%s, 0, %s);
                 """, [new_session_id, expires_at])
                 conn.commit()
-                get_is_master.clear()
+                get_master.clear()
                 cookie_manager.set("session_id", new_session_id, max_age=st.secrets["cookies"]["expires_after_days"]*24*60*60)
                 time.sleep(0.3)
                 st.rerun()
